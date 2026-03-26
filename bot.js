@@ -383,7 +383,21 @@ async function sendSportInfoAndSave(session) {
 // ── Admin notification ────────────────────────────────────────
 async function notifyAdmin(lead) {
   const adminPhone = process.env.ADMIN_PHONE;
-  if (!adminPhone) return;
+
+  console.log("📲 Admin phone:", adminPhone);
+
+  if (!adminPhone) {
+    console.warn("⚠️ ADMIN_PHONE missing");
+    return;
+  }
+
+  try {
+    await sendTextMessage(adminPhone, "🚀 Test admin alert");
+    console.log("✅ Admin message sent");
+  } catch (err) {
+    console.error("❌ Admin notify failed:", err.response?.data || err.message);
+  }
+}
 
   const now = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
   const msg =
