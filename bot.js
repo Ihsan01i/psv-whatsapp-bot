@@ -384,22 +384,13 @@ async function sendSportInfoAndSave(session) {
 async function notifyAdmin(lead) {
   const adminPhone = process.env.ADMIN_PHONE;
 
-  console.log("📲 Admin phone:", adminPhone);
-
   if (!adminPhone) {
     console.warn("⚠️ ADMIN_PHONE missing");
     return;
   }
 
-  try {
-    await sendTextMessage(adminPhone, "🚀 Test admin alert");
-    console.log("✅ Admin message sent");
-  } catch (err) {
-    console.error("❌ Admin notify failed:", err.response?.data || err.message);
-  }
-}
-
   const now = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+
   const msg =
     `🔔 *New Lead — PSV Sports Academy*\n\n` +
     `👤 Name: ${lead.customerName}\n` +
@@ -410,9 +401,9 @@ async function notifyAdmin(lead) {
 
   try {
     await sendTextMessage(adminPhone, msg);
-    console.log(`📲 Admin notified`);
+    console.log("✅ Admin message sent");
   } catch (err) {
-    console.error("❌ Admin notify failed:", err.message);
+    console.error("❌ Admin notify failed:", err.response?.data || err.message);
   }
 }
 
