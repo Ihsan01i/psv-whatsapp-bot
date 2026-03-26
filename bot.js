@@ -1,216 +1,405 @@
 // ============================================================
-// bot.js — Conversation flow & state management
+// bot.js — PSV Sports Academy WhatsApp Bot
+// FLOW:
+// 1. User messages → Sport list
+// 2. Badminton → Coaching or Court Booking?
+// 3. Ask Name
+// 4. Ask Location (optional)
+// 5. Send sport-specific info
+// 6. Save to Google Sheets + Notify admin
+// 7. Confirm to user
 // ============================================================
 
 const { sendTextMessage, sendListMessage, sendButtonMessage } = require("./whatsapp");
-const { saveLead } = require("./csv");
+const { saveLead } = require("./sheets");
+const fs           = require("fs");
+const SESSION_FILE = "./sessions.json";
 
-// ── In-memory state store ─────────────────────────────────────
-// Key: phone number  |  Value: { step, name, category, address }
-// NOTE: This resets if you restart the server.
-// For production, use Redis or a simple JSON file.
-const sessions = {};
-
-// ── Sports options ────────────────────────────────────────────
-const SPORTS = {
-  badminton:      "🏸 Badminton",
-  cricket:        "🏏 Cricket",
-  archery:        "🏹 Archery",
-  roller_skating: "🛼 Roller Skating",
-};
-
-// Category-specific info messages sent after selection
-const SPORT_INFO = {
-  badminton: `🏸 *Badminton at PSV Academy*\n\n📅 Batches: Mon-Sat | 6AM-8AM & 5PM-7PM\n💰 Fees: ₹1,500/month\n👟 Equipment provided for beginners\n\nCoach: Mr. Ravi Kumar (National Level)`,
-  cricket:   `🏏 *Cricket at PSV Academy*\n\n📅 Batches: Tue, Thu, Sat | 6AM-9AM\n💰 Fees: ₹2,000/month\n🏟️ Full ground practice included\n\nCoach: Mr. Suresh (State Level)`,
-  archery:   `🏹 *Archery at PSV Academy*\n\n📅 Batches: Mon, Wed, Fri | 5PM-7PM\n💰 Fees: ₹1,800/month\n🎯 All equipment provided\n\nCoach: Ms. Priya (FITA Certified)`,
-  roller_skating: `🛼 *Roller Skating at PSV Academy*\n\n📅 Batches: Daily | 4PM-6PM\n💰 Fees: ₹1,200/month\n⛸️ Skates provided for first month\n\nCoach: Mr. Arun (State Champion)`,
-};
-
-// ── Main handler (called from server.js) ─────────────────────
-async function handleIncomingMessage(message, contact) {
-  const phone = message.from;                          // e.g. "919876543210"
-  const name  = contact?.profile?.name || "Unknown";  // WhatsApp profile name
-  const type  = message.type;                         // "text", "interactive", etc.
-
-  // Get or create session for this user
-  if (!sessions[phone]) {
-    sessions[phone] = { step: "new", name, phone };
+// ── Session persistence ───────────────────────────────────────
+let sessions = {};
+try {
+  if (fs.existsSync(SESSION_FILE)) {
+    sessions = JSON.parse(fs.readFileSync(SESSION_FILE, "utf8"));
+    console.log(`📂 Restored ${Object.keys(sessions).length} sessions`);
   }
-  const session = sessions[phone];
-  session.name = name; // Refresh name each time
+} catch (e) { sessions = {}; }
 
-  console.log(`📨 From: ${phone} | Step: ${session.step} | Type: ${type}`);
+function saveSessions() {
+  try { fs.writeFileSync(SESSION_FILE, JSON.stringify(sessions, null, 2)); }
+  catch (e) { console.error("Session save error:", e.message); }
+}
 
-  // ── Route based on current step ───────────────────────────
+// ── Sport info (sent AFTER name + location collected) ─────────
+const SPORT_INFO = {
+
+  badminton_coaching: `🏸 *PSV Badminton Academy — Coaching*
+
+📍 *Locations:*
+1. PSV Badminton Court, Shareca Lane, Behind Joy Alukkas Gold Tower, Vazhakkala
+2. Nava Sports Center, Annex Road, Desiyamukku, Vazhakkala
+
+⏰ *Adult Batches:*
+• 6:30 AM – 8:30 AM
+• 7:30 AM – 9:30 AM
+• 8:30 AM – 10:30 AM
+• 6:30 PM – 8:30 PM
+• 7:30 PM – 9:30 PM
+• 8:30 PM – 10:30 PM
+
+👦 *Kids Batches:*
+• 5:00 PM – 6:30 PM
+• Parents accompanying kids can also attend!
+• Weekend sessions available ✅
+
+💰 *Adult Packages:*
+1. 20 days/month — ₹4,000
+2. 16 days/month — ₹3,500
+3. 12 days/month — ₹3,000
+4. 8 days/month — ₹2,500
+5. 30 sessions in 2 months — ₹5,000
+
+💰 *Kids Packages:*
+1. 20 days/month — ₹3,000
+2. 12 days/month — ₹2,500
+3. 8 days/month — ₹2,000
+
+📞 Call/WhatsApp: *+91 9509502000*`,
+
+  badminton_court: `🏸 *PSV Badminton — Court Booking*
+
+We have 2 court locations in Vazhakkala & Desiyamukku!
+
+1️⃣ *PSV Badminton Court*
+📍 https://maps.app.goo.gl/SQ7LZMtDhCpwepsh6
+🔗 Book: https://book.playspots.in/venues/psv-badminton-academy-shareca-lane-vazhakkala
+
+2️⃣ *PSV–Nava Badminton Court*
+📍 https://maps.app.goo.gl/N7VYk8C4q7XeTWZB6
+🔗 Book: https://book.playspots.in/venues/nava-sports-centre
+
+For group/monthly bookings:
+📞 *+91 9509502000*`,
+
+  archery: `🏹 *Archery Classes by PSV*
+
+Professional coaching by Pro Sports Ventures (PSV)
+
+📍 *Location:* Nava Nirman School, Annex Road, Desiyamukku, Vazhakkala
+🗓 *Days:* Monday – Friday
+⏰ *Time:* 4:00 PM – 6:00 PM
+
+💰 *Packages:*
+• ₹2,500 — 2 days/week (8 sessions/month)
+• ₹3,000 — 3 days/week (12 sessions/month)
+
+🎯 Classes start: 1st week of April
+📞 Book a FREE demo: *+91 9509502000*`,
+
+  basketball: `🏀 *Basketball Coaching — Adults & Kids*
+ABC Indoor Basketball Academy
+
+🔥 *Coaching Batches:*
+
+👦 Beginners (Under 15)
+⏰ 6:15 PM – 7:30 PM | Mon – Thu
+
+🧑 Beginners (Above 15 years)
+⏰ 5:00 PM – 6:30 PM | Fri, Sat & Sun
+
+🏀 Intermediate / Advanced / Pro
+⏰ 7:30 PM – 9:30 PM | Mon – Fri
+
+💰 *Fee Packages:*
+• 12 Sessions — ₹2,500
+• 15 Sessions — ₹3,500
+• 20 Sessions — ₹4,000
+
+⭐ *Special Services:*
+• Personal Training (15 sessions) — ₹5,000
+• Team Training (School/College/IT) — ₹2,000/session
+
+📞 Call/WhatsApp: *+91 9509502000*`,
+
+  roller_skating: `🛼 *Roller Skating Classes — Adults & Kids*
+
+🎯 Structured & monitored sessions
+👨‍🏫 Expert coaches
+⚖️ Balance • Fitness • Confidence
+
+👶 Kids: 3 years onwards
+🧑 Adults: No age limit!
+
+💰 *Fees:*
+• 2 sessions/week — ₹2,500/month
+• 3 sessions/week — ₹3,500/month
+
+📍 *Location:* Nava Nirman School, Vayu Sena Road, Kakkanad
+🗺 https://maps.app.goo.gl/MuZtZsZLMcjAXfQK9
+
+⏰ Mon – Thu | 4:00 PM – 6:00 PM
+
+🎁 *Free demo session available for everyone!*
+📞 Call/WhatsApp: *+91 9509502000*`,
+};
+
+// Google Sheets tab names
+const TAB_NAMES = {
+  badminton_coaching: "Badminton - Coaching",
+  badminton_court:    "Badminton - Court Booking",
+  archery:            "Archery",
+  basketball:         "Basketball",
+  roller_skating:     "Roller Skating",
+};
+
+// ── Main handler ──────────────────────────────────────────────
+async function handleIncomingMessage(message, contact) {
+  const phone  = message.from;
+  const waName = contact?.profile?.name || "Unknown";
+
+  if (!sessions[phone]) {
+    sessions[phone] = { step: "new", waName, phone };
+    saveSessions();
+  }
+  const session  = sessions[phone];
+  session.waName = waName;
+
+  console.log(`📨 ${phone} | step: ${session.step} | type: ${message.type}`);
+
+  // Handle free-text steps first (outside switch)
+  if (session.step === "awaiting_name") {
+    await handleName(session, message);
+    return;
+  }
+  if (session.step === "typing_location") {
+    session.location = message.text?.body?.trim() || "";
+    await sendSportInfoAndSave(session);
+    return;
+  }
+
   switch (session.step) {
-
     case "new":
-      await sendWelcome(phone, name);
-      session.step = "awaiting_sport";
+    case "completed":
+      sessions[phone] = { step: "awaiting_sport", waName, phone };
+      saveSessions();
+      await sendSportMenu(phone);
       break;
 
     case "awaiting_sport":
-      await handleSportSelection(session, message);
+      await handleSportChoice(session, message);
       break;
 
-    case "awaiting_address":
-      await handleAddressStep(session, message);
+    case "awaiting_badminton_option":
+      await handleBadmintonOption(session, message);
       break;
 
-    case "completed":
-      // Conversation already done — restart if they message again
-      sessions[phone] = { step: "new", name, phone };
-      await sendWelcome(phone, name);
-      sessions[phone].step = "awaiting_sport";
+    case "awaiting_location":
+      await handleLocation(session, message);
       break;
 
     default:
-      await sendWelcome(phone, name);
-      session.step = "awaiting_sport";
+      sessions[phone] = { step: "awaiting_sport", waName, phone };
+      saveSessions();
+      await sendSportMenu(phone);
   }
 }
 
-// ── Step 1: Welcome + sport list ──────────────────────────────
-async function sendWelcome(phone, name) {
-  const greeting = `👋 Welcome to *PSV Sports Academy*, ${name}!\n\nWe offer world-class coaching to shape tomorrow's champions. 🏆\n\nPlease select the sport you're interested in:`;
-
-  // Send as interactive list (shows nicely in WhatsApp)
-  await sendListMessage(phone, greeting, "Choose Sport", [
-    { id: "badminton",      title: "🏸 Badminton",      description: "Mon-Sat | ₹1,500/mo" },
-    { id: "cricket",        title: "🏏 Cricket",         description: "3 days/week | ₹2,000/mo" },
-    { id: "archery",        title: "🏹 Archery",          description: "3 days/week | ₹1,800/mo" },
-    { id: "roller_skating", title: "🛼 Roller Skating",   description: "Daily | ₹1,200/mo" },
-  ]);
+// ── Step 1: Sport menu ────────────────────────────────────────
+async function sendSportMenu(phone) {
+  await sendListMessage(
+    phone,
+    `👋 Welcome to *PSV Sports Academy!*\n\nWe offer professional coaching across multiple sports. 🏆\n\nPlease select the sport you are interested in:`,
+    "View Sports",
+    [
+      { id: "badminton",      title: "🏸 Badminton",     description: "Coaching & Court Booking" },
+      { id: "archery",        title: "🏹 Archery",        description: "Mon–Fri | 4–6 PM" },
+      { id: "basketball",     title: "🏀 Basketball",     description: "Kids & Adults batches" },
+      { id: "roller_skating", title: "🛼 Roller Skating", description: "From 3 years | Free demo" },
+    ]
+  );
 }
 
-// ── Step 2: Handle sport selection ───────────────────────────
-async function handleSportSelection(session, message) {
+// ── Step 2: Handle sport choice ───────────────────────────────
+async function handleSportChoice(session, message) {
   const phone = session.phone;
   let sportKey = null;
 
-  // User can reply via interactive list OR type the name
   if (message.type === "interactive") {
     const reply = message.interactive?.list_reply || message.interactive?.button_reply;
     sportKey = reply?.id?.toLowerCase();
   } else if (message.type === "text") {
-    const text = message.text?.body?.toLowerCase().trim();
-    // Match by keyword
-    if (text.includes("badminton"))      sportKey = "badminton";
-    else if (text.includes("cricket"))   sportKey = "cricket";
-    else if (text.includes("archery"))   sportKey = "archery";
-    else if (text.includes("skating") || text.includes("roller")) sportKey = "roller_skating";
+    const t = message.text?.body?.toLowerCase().trim();
+    if (t.includes("badminton"))                           sportKey = "badminton";
+    else if (t.includes("archery"))                        sportKey = "archery";
+    else if (t.includes("basket"))                         sportKey = "basketball";
+    else if (t.includes("skate") || t.includes("roller")) sportKey = "roller_skating";
   }
 
-  if (!sportKey || !SPORT_INFO[sportKey]) {
-    // Invalid selection — re-prompt
-    await sendTextMessage(phone, "❗ Please select a sport from the list below:");
-    await sendListMessage(phone, "Choose your sport:", "Choose Sport", [
-      { id: "badminton",      title: "🏸 Badminton",      description: "Mon-Sat | ₹1,500/mo" },
-      { id: "cricket",        title: "🏏 Cricket",         description: "3 days/week | ₹2,000/mo" },
-      { id: "archery",        title: "🏹 Archery",          description: "3 days/week | ₹1,800/mo" },
-      { id: "roller_skating", title: "🛼 Roller Skating",   description: "Daily | ₹1,200/mo" },
-    ]);
+  if (!sportKey) {
+    await sendTextMessage(phone, "❗ Please select a sport from the list:");
+    await sendSportMenu(phone);
     return;
   }
 
-  // Save selected sport to session
-  session.category = SPORTS[sportKey];
+  // Badminton needs sub-option before asking name
+  if (sportKey === "badminton") {
+    session.step = "awaiting_badminton_option";
+    saveSessions();
+    await sendButtonMessage(
+      phone,
+      `🏸 *PSV Badminton Academy*\n\nWhat are you interested in?`,
+      [
+        { id: "badminton_coaching", title: "🎓 Coaching" },
+        { id: "badminton_court",    title: "🏟️ Court Booking" },
+      ]
+    );
+    return;
+  }
+
+  // For all other sports — go straight to asking name
   session.sportKey = sportKey;
-
-  // Send sport-specific info
-  await sendTextMessage(phone, SPORT_INFO[sportKey]);
-
-  // Ask for address (optional)
-  await sendButtonMessage(
-    phone,
-    `📍 *One last step!*\n\nWould you like to share your address?\nThis helps us suggest the nearest batch location.\n\n_(You can skip this — it's optional)_`,
-    [
-      { id: "share_address", title: "📍 Share Address" },
-      { id: "skip_address",  title: "⏭️ Skip" },
-    ]
-  );
-
-  session.step = "awaiting_address";
+  session.step     = "awaiting_name";
+  saveSessions();
+  await sendTextMessage(phone, "✏️ Please enter your *name* so we can get back to you:");
 }
 
-// ── Step 3: Handle address step ───────────────────────────────
-async function handleAddressStep(session, message) {
+// ── Step 2b: Badminton sub-option → then ask name ─────────────
+async function handleBadmintonOption(session, message) {
+  const phone = session.phone;
+  let key = null;
+
+  if (message.type === "interactive") {
+    key = message.interactive?.button_reply?.id;
+  } else if (message.type === "text") {
+    const t = message.text?.body?.toLowerCase().trim();
+    if (t.includes("coach"))                         key = "badminton_coaching";
+    else if (t.includes("court") || t.includes("book")) key = "badminton_court";
+  }
+
+  if (!key) {
+    await sendButtonMessage(
+      phone,
+      `Please choose one of the options:`,
+      [
+        { id: "badminton_coaching", title: "🎓 Coaching" },
+        { id: "badminton_court",    title: "🏟️ Court Booking" },
+      ]
+    );
+    return;
+  }
+
+  // Sport key confirmed — now ask name
+  session.sportKey = key;
+  session.step     = "awaiting_name";
+  saveSessions();
+  await sendTextMessage(phone, "✏️ Please enter your *name* so we can get back to you:");
+}
+
+// ── Step 3: Collect name ──────────────────────────────────────
+async function handleName(session, message) {
   const phone = session.phone;
 
-  let address = "";
-  let skipped = false;
+  if (message.type !== "text" || !message.text?.body?.trim()) {
+    await sendTextMessage(phone, "Please type your name:");
+    return;
+  }
+
+  session.name = message.text.body.trim();
+  session.step = "awaiting_location";
+  saveSessions();
+
+  await sendButtonMessage(
+    phone,
+    `📍 Hi *${session.name}!* Could you share your *location/area*?\nThis helps us suggest the nearest centre.\n\n_(You can skip this)_`,
+    [
+      { id: "share_location", title: "📍 Share Location" },
+      { id: "skip_location",  title: "⏭️ Skip" },
+    ]
+  );
+}
+
+// ── Step 4: Collect location → then send info ─────────────────
+async function handleLocation(session, message) {
+  const phone = session.phone;
 
   if (message.type === "interactive") {
     const reply = message.interactive?.button_reply;
-    if (reply?.id === "skip_address") {
-      skipped = true;
-    } else if (reply?.id === "share_address") {
-      // They clicked "Share Address" — ask them to type it
-      await sendTextMessage(phone, "✏️ Please type your address below (area, city is enough):");
-      session.step = "typing_address";
-      return;
+    if (reply?.id === "skip_location") {
+      session.location = "";
+      await sendSportInfoAndSave(session);
+    } else if (reply?.id === "share_location") {
+      session.step = "typing_location";
+      saveSessions();
+      await sendTextMessage(phone, "✏️ Please type your area/city:");
     }
   } else if (message.type === "text") {
-    address = message.text?.body?.trim() || "";
-    if (address.toLowerCase() === "skip" || address === "") {
-      skipped = true;
-    }
+    const t = message.text?.body?.trim();
+    session.location = (!t || t.toLowerCase() === "skip") ? "" : t;
+    await sendSportInfoAndSave(session);
   }
-
-  session.address = skipped ? "" : address;
-  await completeLead(session);
 }
 
-// Called when user is in typing_address sub-step
-async function handleIncomingMessage_typing(session, message) {
-  // This is handled via the switch — we re-route here
-}
+// ── Step 5: Send sport info → Save → Notify → Confirm ────────
+async function sendSportInfoAndSave(session) {
+  const phone   = session.phone;
+  const tabName = TAB_NAMES[session.sportKey] || session.sportKey;
 
-// ── Step 4: Save lead & confirm ───────────────────────────────
-async function completeLead(session) {
-  const phone = session.phone;
+  // Send the sport info message
+  await sendTextMessage(phone, SPORT_INFO[session.sportKey]);
 
+  // Save lead to Google Sheets
   const lead = {
     customerName: session.name,
     mobileNumber: phone,
-    leadCategory: session.category,
-    address:      session.address || "",
-    leadSource:   "WhatsApp Bot",
-    priority:     "Medium",
-    leadStatus:   "New",
+    leadCategory: tabName,
+    address:      session.location || "",
   };
 
-  await saveLead(lead);
+  try {
+    await saveLead(lead);
+  } catch (err) {
+    console.error("❌ Sheets save failed:", err.message);
+  }
 
-  const confirmMsg =
+  // Notify admin
+  await notifyAdmin(lead);
+
+  // Confirmation message
+  const confirm =
     `✅ *Thank you, ${session.name}!*\n\n` +
-    `Your enquiry has been registered with PSV Sports Academy.\n\n` +
+    `We've received your enquiry and will contact you shortly.\n\n` +
     `📋 *Your Details:*\n` +
-    `• Sport: ${session.category}\n` +
+    `• Interest: ${tabName}\n` +
     `• Mobile: +${phone}\n` +
-    (session.address ? `• Address: ${session.address}\n` : "") +
-    `\n🏆 Our team will contact you shortly to confirm your batch.\n\n` +
-    `For urgent queries: 📞 Call us at +91-XXXXXXXXXX\n\n` +
+    (session.location ? `• Location: ${session.location}\n` : "") +
+    `\n📞 For urgent queries: *+91 9509502000*\n\n` +
     `_PSV Sports Academy — Building Champions!_ 🌟`;
 
-  await sendTextMessage(phone, confirmMsg);
+  await sendTextMessage(phone, confirm);
+
   session.step = "completed";
+  saveSessions();
 }
 
-// ── Handle typing_address step separately ─────────────────────
-// We patch handleIncomingMessage to route this step too
-const _orig = handleIncomingMessage;
-module.exports = {
-  handleIncomingMessage: async (message, contact) => {
-    const phone = message.from;
-    if (sessions[phone]?.step === "typing_address") {
-      const session = sessions[phone];
-      const address = message.text?.body?.trim() || "";
-      session.address = address;
-      await completeLead(session);
-      return;
-    }
-    await _orig(message, contact);
-  },
-};
+// ── Admin notification ────────────────────────────────────────
+async function notifyAdmin(lead) {
+  const adminPhone = process.env.ADMIN_PHONE;
+  if (!adminPhone) return;
+
+  const now = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+  const msg =
+    `🔔 *New Lead — PSV Sports Academy*\n\n` +
+    `👤 Name: ${lead.customerName}\n` +
+    `📱 Mobile: +${lead.mobileNumber}\n` +
+    `🏅 Interest: ${lead.leadCategory}\n` +
+    `📍 Location: ${lead.address || "Not provided"}\n` +
+    `🕐 Time: ${now}`;
+
+  try {
+    await sendTextMessage(adminPhone, msg);
+    console.log(`📲 Admin notified`);
+  } catch (err) {
+    console.error("❌ Admin notify failed:", err.message);
+  }
+}
+
+module.exports = { handleIncomingMessage };
