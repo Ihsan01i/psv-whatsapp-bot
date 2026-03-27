@@ -7,6 +7,7 @@ require("dotenv").config();
 
 const express    = require("express");
 const bodyParser = require("body-parser");
+const cors = require("cors");
 
 const { handleIncomingMessage } = require("./bot");
 const { sendTextMessage }       = require("./whatsapp");
@@ -14,6 +15,8 @@ const { saveLead, testConnection } = require("./sheets");
 
 const app = express();
 app.use(bodyParser.json());
+
+app.use(cors());
 
 
 // ── 1. WEBHOOK VERIFICATION ──────────────────────────────────
