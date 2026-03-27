@@ -88,7 +88,12 @@ app.post("/submit-lead", async (req, res) => {
       `🕐 Age: ${age || "-"} | Time: ${time || "-"}\n` +
       `📍 Location: ${location || "Not provided"}`;
 
-    await sendTextMessage(process.env.ADMIN_PHONE, adminMsg);
+    try {
+  await sendTextMessage(process.env.ADMIN_PHONE, adminMsg);
+  console.log("📲 Admin notified");
+} catch (err) {
+  console.error("❌ WhatsApp failed:", err.response?.data || err.message);
+}
 
     console.log("✅ Website lead saved + admin notified");
 
