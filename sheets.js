@@ -1,12 +1,15 @@
 // ============================================================
 // sheets.js — Google Sheets, one tab per sport
-// ============================================================
-// Setup:
-// 1. Create ONE Google Sheet (any name e.g. "PSV Leads")
-// 2. Share it with your service account email
-// 3. Add to Railway variables:
-//    GOOGLE_CREDENTIALS = entire credentials.json content
-//    SHEET_ID = ID from your sheet URL
+// Columns: Client Name | Contact Number | Address | Date | Uploaded
+//
+// HOW TO USE:
+// - Bot auto-fills: Client Name, Contact Number, Address, Date
+// - You fill manually: type "YES" in Uploaded column after CRM upload
+// - To export only new leads:
+//     1. Filter Uploaded column → show blanks only
+//     2. File → Download → CSV
+//     3. Upload to Login2Pro
+//     4. Type YES in Uploaded column for those rows
 // ============================================================
 
 const { google } = require("googleapis");
@@ -20,12 +23,14 @@ function getAuth() {
   });
 }
 
+// ── Get or create a tab by sport name ────────────────────────
 async function getOrCreateTab(sheets, spreadsheetId, tabName) {
   const meta     = await sheets.spreadsheets.get({ spreadsheetId });
   const existing = meta.data.sheets.map(s => s.properties.title);
 
   if (existing.includes(tabName)) return;
 
+  // Create the tab
   await sheets.spreadsheets.batchUpdate({
     spreadsheetId,
     requestBody: {
@@ -33,43 +38,60 @@ async function getOrCreateTab(sheets, spreadsheetId, tabName) {
     }
   });
 
+  // Add headers to new tab
   await sheets.spreadsheets.values.update({
     spreadsheetId,
-    range: `${tabName}!A1:C1`,
+    range:            `${tabName}!A1:E1`,
     valueInputOption: "RAW",
-    requestBody: { values: [["Client Name", "Contact Number", "Address"]] }
+    requestBody: {
+      values: [["Client Name", "Contact Number", "Address", "Date", "Uploaded"]]
+    }
   });
 
-  console.log(`📋 Created new tab: ${tabName}`);
+  console.log(`📋 Created new tab: "${tabName}"`);
 }
 
+// ── Save one lead row ─────────────────────────────────────────
 async function saveLead(lead) {
   const spreadsheetId = process.env.SHEET_ID;
   if (!spreadsheetId) throw new Error("SHEET_ID env variable is missing!");
 
-  const auth    = getAuth();
-  const sheets  = google.sheets({ version: "v4", auth });
+  const auth   = getAuth();
+  const sheets = google.sheets({ version: "v4", auth });
+
   const tabName = lead.leadCategory || "General";
 
+  // Create tab if it doesn't exist yet
   await getOrCreateTab(sheets, spreadsheetId, tabName);
 
+  // Build the row — 5 columns
+  const date = new Date().toLocaleDateString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day:      "2-digit",
+    month:    "2-digit",
+    year:     "numeric",
+  });
+
   const row = [
-    lead.customerName || "Unknown",
-    lead.mobileNumber || "",
-    lead.address      || "",
+    lead.customerName || "Unknown", // A - Client Name
+    lead.mobileNumber || "",        // B - Contact Number
+    lead.address      || "",        // C - Address
+    date,                           // D - Date (auto)
+    "",                             // E - Uploaded (you type YES manually)
   ];
 
   await sheets.spreadsheets.values.append({
     spreadsheetId,
-    range:            `${tabName}!A:C`,
+    range:            `${tabName}!A:E`,
     valueInputOption: "USER_ENTERED",
     insertDataOption: "INSERT_ROWS",
     requestBody:      { values: [row] },
   });
 
-  console.log(`✅ Saved to tab "${tabName}": ${lead.customerName}`);
+  console.log(`✅ Lead saved → "${tabName}" | ${lead.customerName} | ${date}`);
 }
 
+// ── Test connection on server start ──────────────────────────
 async function testConnection() {
   try {
     const spreadsheetId = process.env.SHEET_ID;
