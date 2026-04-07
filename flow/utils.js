@@ -87,7 +87,7 @@ function resolveSubOptionMeta(optionKey) {
       return { tabName: opt.tabName, message: opt.message };
     }
   }
-  return { tabName: optionKey, message: "Thank you for your interest!" };
+  return null;
 }
 
 // ─────────────────────────────────────────────

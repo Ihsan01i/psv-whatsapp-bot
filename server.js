@@ -18,6 +18,14 @@ const app = express();
 app.use(bodyParser.json());
 app.use(cors());
 
+const rateLimit = require("express-rate-limit");
+
+app.use("/submit-lead", rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20,                   // max 20 requests per IP
+  message: "Too many requests. Please try again later."
+}));
+
 // ── 1. WEBHOOK VERIFICATION
 app.get("/webhook", (req, res) => {
   const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "psv_sports_token";
@@ -53,30 +61,40 @@ app.post("/webhook", async (req, res) => {
 });
 
 // ── 3. WEBSITE LEAD SUBMISSION
-app.post("/submit-lead", async (req, res) => {
+const { completeFlow } = require("./flow/handlers");
+const { normalizePhone } = require("./utils/phone");
+
+app.post('/submit-lead', async (req, res) => {
   try {
-    const { name, phone, sport, age, time, location } = req.body;
-    if (!name || !phone || !sport) {
-      return res.status(400).json({ success: false, message: "Missing required fields" });
-    }
-    await saveLead({ customerName: name, mobileNumber: phone, leadCategory: sport, address: location || "" });
+    const { name, phone, sportKey, location } = req.body;
 
-    const adminMsg =
-      `🌐 *New Website Lead!*\n\n👤 Name: ${name}\n📞 Phone: ${phone}\n🏅 Sport: ${sport}\n` +
-      `🕐 Age: ${age || "-"} | Time: ${time || "-"}\n📍 Location: ${location || "Not provided"}`;
-
-    try {
-      await sendTextMessage(process.env.ADMIN_PHONE, adminMsg);
-      logger.info("Admin notified of website lead");
-    } catch (err) {
-      logger.error("Admin notify failed:", err.response?.data || err.message);
+    // ✅ Validate
+    if (!name || !phone || !sportKey) {
+      return res.status(400).json({ error: "Missing required fields" });
     }
+
+    // ✅ Normalize
+    const normalizedPhone = normalizePhone(phone);
+
+    // ✅ Session
+    const session = {
+      name: name.trim(),
+      phone: normalizedPhone,
+      sportKey,
+      location: location?.trim() || ""
+    };
+
+    // ✅ Trigger bot flow
+    await completeFlow(normalizedPhone, session);
+
     res.json({ success: true });
+
   } catch (err) {
-    logger.error("Website lead error:", err.message);
-    res.status(500).json({ success: false });
+    logger.error("Submit lead error:", err.message);
+    res.status(400).json({ error: err.message });
   }
 });
+
 
 // ── 4. TEST ADMIN NOTIFICATION
 app.get("/test-admin", async (req, res) => {

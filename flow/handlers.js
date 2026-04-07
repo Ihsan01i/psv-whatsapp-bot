@@ -205,7 +205,7 @@ async function completeFlow(phone, session) {
   // Try sub-option resolution first (e.g. "badminton_coaching")
 const subMeta = resolveSubOptionMeta(session.sportKey);
 
-  if (subMeta.tabName !== session.sportKey) {
+if (subMeta) {
   tabName = subMeta.tabName;
   message = subMeta.message;
 } else {
@@ -245,4 +245,5 @@ module.exports = {
   handleAwaitingLocation,
   handleTypingLocation,
   handleCompleted,
+  completeFlow,
 };
