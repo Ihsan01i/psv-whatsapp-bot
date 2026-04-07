@@ -1,6 +1,13 @@
 // ============================================================
-// PSV SPORTS ACADEMY - WhatsApp Lead Bot + Website Backend
-// server.js — Updated for modular bot architecture
+// server.js — PSV Sports Academy: Updated for Phase 2 (Supabase)
+//
+// Changes from Phase 1:
+//   - /submit-lead now saves to Supabase (not just Sheets/CSV)
+//   - Added /api/leads  → fetch/filter leads (admin use)
+//   - Added /api/bulk-send → trigger bulk WhatsApp send
+//
+// Backwards compatible: Google Sheets integration can remain
+// in parallel during transition — just set SHEET_ID in .env.
 // ============================================================
 
 require("dotenv").config();
@@ -11,22 +18,26 @@ const cors       = require("cors");
 
 const { handleIncomingMessage }    = require("./bot");
 const { sendTextMessage }          = require("./whatsapp");
-const { saveLead, testConnection } = require("./sheets");
+const { saveLead, testConnection } = require("./sheets");   // keep during transition
+const { processLead, fetchLeads }  = require("./services/lead");
+const { runBulkSend }              = require("./bulkSender");
+const { normalisePhone }           = require("./services/lead");
 const logger                       = require("./utils/logger");
 
 const app = express();
 app.use(bodyParser.json());
 app.use(cors());
 
-const rateLimit = require("express-rate-limit");
+// ── Optional: simple API key guard for admin routes ───────────
+function requireAdminKey(req, res, next) {
+  const key = req.headers["x-admin-key"] || req.query.adminKey;
+  if (key && key === process.env.ADMIN_API_KEY) return next();
+  return res.status(401).json({ error: "Unauthorised" });
+}
 
-app.use("/submit-lead", rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 20,                   // max 20 requests per IP
-  message: "Too many requests. Please try again later."
-}));
-
-// ── 1. WEBHOOK VERIFICATION
+// ────────────────────────────────────────────────────────────
+// 1. WEBHOOK VERIFICATION
+// ────────────────────────────────────────────────────────────
 app.get("/webhook", (req, res) => {
   const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "psv_sports_token";
   const mode      = req.query["hub.mode"];
@@ -41,9 +52,11 @@ app.get("/webhook", (req, res) => {
   return res.sendStatus(403);
 });
 
-// ── 2. RECEIVE WHATSAPP MESSAGES
+// ────────────────────────────────────────────────────────────
+// 2. RECEIVE WHATSAPP MESSAGES
+// ────────────────────────────────────────────────────────────
 app.post("/webhook", async (req, res) => {
-  res.sendStatus(200); // Always 200 immediately
+  res.sendStatus(200);
   try {
     const body = req.body;
     if (
@@ -60,70 +73,127 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// ── 3. WEBSITE LEAD SUBMISSION
-const { completeFlow } = require("./flow/handlers");
-const { normalizePhone } = require("./utils/phone");
-
-app.post('/submit-lead', async (req, res) => {
+// ────────────────────────────────────────────────────────────
+// 3. WEBSITE LEAD SUBMISSION  ← Updated for Supabase
+// ────────────────────────────────────────────────────────────
+app.post("/submit-lead", async (req, res) => {
   try {
-    const { name, phone, sportKey, location } = req.body;
+    const { name, phone, sport, age, time, location } = req.body;
 
-    // ✅ Validate
-    if (!name || !phone || !sportKey) {
-      return res.status(400).json({ error: "Missing required fields" });
+    if (!name || !phone || !sport) {
+      return res.status(400).json({ success: false, message: "Missing required fields" });
     }
 
-    // ✅ Normalize
-    const normalizedPhone = normalizePhone(phone);
+    const normalisedPhone = normalisePhone(phone);
 
-    // ✅ Session
+    // Build a session-like object compatible with processLead()
     const session = {
-      name: name.trim(),
-      phone: normalizedPhone,
-      sportKey,
-      location: location?.trim() || ""
+      name,
+      phone:    normalisedPhone,
+      sportKey: sport,
+      location: location || "",
+      waName:   "",
+      source:   "website",
     };
 
-    // ✅ Trigger bot flow
-    await completeFlow(normalizedPhone, session);
+    // tabName for website leads = sport value as received
+    // (you can map this to your sports.js tabName if needed)
+    const tabName = sport;
+
+    // Save to Supabase + notify admin — both fault-tolerant
+    await processLead(session, tabName);
+
+    // Keep saving to Sheets during the transition period
+    // Remove this block once you've fully moved to Supabase:
+    try {
+      await saveLead({
+        customerName: name,
+        mobileNumber: normalisedPhone,
+        leadCategory: sport,
+        address:      location || "",
+      });
+    } catch (sheetErr) {
+      logger.warn("[Server] Sheets save failed (non-fatal):", sheetErr.message);
+    }
 
     res.json({ success: true });
-
   } catch (err) {
-    logger.error("Submit lead error:", err.message);
-    res.status(400).json({ error: err.message });
+    logger.error("Website lead error:", err.message);
+    res.status(500).json({ success: false });
   }
 });
 
-
-// ── 4. TEST ADMIN NOTIFICATION
-app.get("/test-admin", async (req, res) => {
-  const adminPhone = process.env.ADMIN_PHONE;
-  if (!adminPhone) return res.send("❌ ADMIN_PHONE is not set!");
+// ────────────────────────────────────────────────────────────
+// 4. ADMIN: FETCH LEADS  (protected)
+//
+// GET /api/leads?sportKey=archery&since=2024-01-01&source=whatsapp
+// Header: x-admin-key: <ADMIN_API_KEY>
+// ────────────────────────────────────────────────────────────
+app.get("/api/leads", requireAdminKey, async (req, res) => {
   try {
-    await sendTextMessage(adminPhone, "🔔 PSV Bot — Test admin notification!\n\nIf you see this, admin alerts are working ✅");
-    res.send(`✅ Message sent to: ${adminPhone}`);
+    const { sportKey, since, source, limit } = req.query;
+    const leads = await fetchLeads({
+      sportKey: sportKey || undefined,
+      since:    since    || undefined,
+      source:   source   || undefined,
+      limit:    limit ? parseInt(limit, 10) : 500,
+    });
+    res.json({ success: true, count: leads.length, leads });
   } catch (err) {
-    const errMsg = JSON.stringify(err.response?.data || err.message);
-    logger.error("Test admin failed:", errMsg);
-    res.send(`❌ Failed: ${errMsg}`);
+    logger.error("[API] /api/leads error:", err.message);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// ── 5. HEALTH CHECK
+// ────────────────────────────────────────────────────────────
+// 5. ADMIN: TRIGGER BULK SEND  (protected)
+//
+// POST /api/bulk-send
+// Body: { sportKey, templateKey, dryRun, limit }
+// Header: x-admin-key: <ADMIN_API_KEY>
+//
+// ⚠️  Only call this for users who opted in via WhatsApp.
+// ────────────────────────────────────────────────────────────
+app.post("/api/bulk-send", requireAdminKey, async (req, res) => {
+  // Respond immediately — bulk send may take minutes
+  res.json({ success: true, message: "Bulk send started. Check server logs." });
+
+  const { sportKey, templateKey, dryRun, limit } = req.body;
+
+  try {
+    const results = await runBulkSend({
+      sportKey:    sportKey    || null,
+      templateKey: templateKey || "general_followup",
+      dryRun:      dryRun      ?? false,
+      limit:       limit       || 100,
+    });
+    logger.info("[API] Bulk send completed:", results);
+  } catch (err) {
+    logger.error("[API] /api/bulk-send error:", err.message);
+  }
+});
+
+// ────────────────────────────────────────────────────────────
+// 6. HEALTH CHECK
+// ────────────────────────────────────────────────────────────
 app.get("/health", (req, res) => {
   res.json({
-    status:      "running",
-    time:        new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }),
-    adminPhone:  process.env.ADMIN_PHONE   ? "✅ Set" : "❌ Missing",
-    accessToken: process.env.ACCESS_TOKEN  ? "✅ Set" : "❌ Missing",
-    sheetId:     process.env.SHEET_ID      ? "✅ Set" : "❌ Missing",
+    status:         "running",
+    time:           new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }),
+    adminPhone:     process.env.ADMIN_PHONE       ? "✅ Set" : "❌ Missing",
+    accessToken:    process.env.ACCESS_TOKEN      ? "✅ Set" : "❌ Missing",
+    sheetId:        process.env.SHEET_ID          ? "✅ Set" : "⚠️ Optional",
+    supabaseUrl:    process.env.SUPABASE_URL      ? "✅ Set" : "❌ Missing",
+    supabaseKey:    process.env.SUPABASE_SERVICE_KEY ? "✅ Set" : "❌ Missing",
+    adminApiKey:    process.env.ADMIN_API_KEY     ? "✅ Set" : "⚠️ No admin API key",
   });
 });
 
-// ── 6. START SERVER
+// ────────────────────────────────────────────────────────────
+// 7. START SERVER
+// ────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
   logger.info(`🚀 PSV Sports Academy Bot running on port ${PORT}`);
-  await testConnection();
+  await testConnection().catch(() => logger.warn("Sheets offline — Supabase is primary"));
 });
