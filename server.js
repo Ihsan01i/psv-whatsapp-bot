@@ -1,47 +1,43 @@
 // ============================================================
 // PSV SPORTS ACADEMY - WhatsApp Lead Bot + Website Backend
-// server.js — FINAL VERSION
+// server.js — Updated for modular bot architecture
 // ============================================================
 
 require("dotenv").config();
 
 const express    = require("express");
 const bodyParser = require("body-parser");
-const cors = require("cors");
+const cors       = require("cors");
 
-const { handleIncomingMessage } = require("./bot");
-const { sendTextMessage }       = require("./whatsapp");
+const { handleIncomingMessage }    = require("./bot");
+const { sendTextMessage }          = require("./whatsapp");
 const { saveLead, testConnection } = require("./sheets");
+const logger                       = require("./utils/logger");
 
 const app = express();
 app.use(bodyParser.json());
-
 app.use(cors());
 
-
-// ── 1. WEBHOOK VERIFICATION ──────────────────────────────────
+// ── 1. WEBHOOK VERIFICATION
 app.get("/webhook", (req, res) => {
   const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "psv_sports_token";
-
   const mode      = req.query["hub.mode"];
   const token     = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
 
   if (mode === "subscribe" && token === VERIFY_TOKEN) {
-    console.log("✅ Webhook verified by Meta!");
+    logger.info("Webhook verified by Meta");
     return res.status(200).send(challenge);
   }
-
-  console.error("❌ Webhook verification failed. Check VERIFY_TOKEN.");
+  logger.error("Webhook verification failed. Check VERIFY_TOKEN.");
   return res.sendStatus(403);
 });
 
-
-// ── 2. RECEIVE WHATSAPP MESSAGES ─────────────────────────────
+// ── 2. RECEIVE WHATSAPP MESSAGES
 app.post("/webhook", async (req, res) => {
+  res.sendStatus(200); // Always 200 immediately
   try {
     const body = req.body;
-
     if (
       body.object === "whatsapp_business_account" &&
       body.entry?.[0]?.changes?.[0]?.value?.messages?.[0]
@@ -49,104 +45,67 @@ app.post("/webhook", async (req, res) => {
       const change  = body.entry[0].changes[0].value;
       const message = change.messages[0];
       const contact = change.contacts?.[0];
-
       await handleIncomingMessage(message, contact);
     }
-
-    res.sendStatus(200);
   } catch (err) {
-    console.error("❌ Error handling WhatsApp message:", err);
-    res.sendStatus(200);
+    logger.error("Error handling WhatsApp message:", err.message);
   }
 });
 
-
-// ── 3. WEBSITE LEAD SUBMISSION ───────────────────────────────
+// ── 3. WEBSITE LEAD SUBMISSION
 app.post("/submit-lead", async (req, res) => {
   try {
     const { name, phone, sport, age, time, location } = req.body;
-
-    // Basic validation
     if (!name || !phone || !sport) {
       return res.status(400).json({ success: false, message: "Missing required fields" });
     }
+    await saveLead({ customerName: name, mobileNumber: phone, leadCategory: sport, address: location || "" });
 
-    // Save to Google Sheets
-    await saveLead({
-      customerName: name,
-      mobileNumber: phone,
-      leadCategory: sport,
-      address: location || ""
-    });
-
-    // Send admin WhatsApp notification
     const adminMsg =
-      `🌐 *New Website Lead!*\n\n` +
-      `👤 Name: ${name}\n` +
-      `📞 Phone: ${phone}\n` +
-      `🏅 Sport: ${sport}\n` +
-      `🕐 Age: ${age || "-"} | Time: ${time || "-"}\n` +
-      `📍 Location: ${location || "Not provided"}`;
+      `🌐 *New Website Lead!*\n\n👤 Name: ${name}\n📞 Phone: ${phone}\n🏅 Sport: ${sport}\n` +
+      `🕐 Age: ${age || "-"} | Time: ${time || "-"}\n📍 Location: ${location || "Not provided"}`;
 
     try {
-  await sendTextMessage(process.env.ADMIN_PHONE, adminMsg);
-  console.log("📲 Admin notified");
-} catch (err) {
-  console.error("❌ WhatsApp failed:", err.response?.data || err.message);
-}
-
-    console.log("✅ Website lead saved + admin notified");
-
+      await sendTextMessage(process.env.ADMIN_PHONE, adminMsg);
+      logger.info("Admin notified of website lead");
+    } catch (err) {
+      logger.error("Admin notify failed:", err.response?.data || err.message);
+    }
     res.json({ success: true });
-
   } catch (err) {
-    console.error("❌ Website lead error:", err);
+    logger.error("Website lead error:", err.message);
     res.status(500).json({ success: false });
   }
 });
 
-
-// ── 4. TEST ADMIN NOTIFICATION ───────────────────────────────
-// Visit: /test-admin
+// ── 4. TEST ADMIN NOTIFICATION
 app.get("/test-admin", async (req, res) => {
   const adminPhone = process.env.ADMIN_PHONE;
-
-  if (!adminPhone) {
-    return res.send("❌ ADMIN_PHONE is not set in Railway variables!");
-  }
-
+  if (!adminPhone) return res.send("❌ ADMIN_PHONE is not set!");
   try {
-    await sendTextMessage(
-      adminPhone,
-      "🔔 PSV Bot — Test admin notification!\n\nIf you see this, admin alerts are working ✅"
-    );
-
+    await sendTextMessage(adminPhone, "🔔 PSV Bot — Test admin notification!\n\nIf you see this, admin alerts are working ✅");
     res.send(`✅ Message sent to: ${adminPhone}`);
   } catch (err) {
     const errMsg = JSON.stringify(err.response?.data || err.message);
-    console.error("❌ Test admin failed:", errMsg);
+    logger.error("Test admin failed:", errMsg);
     res.send(`❌ Failed: ${errMsg}`);
   }
 });
 
-
-// ── 5. HEALTH CHECK ──────────────────────────────────────────
-// Visit: /health
+// ── 5. HEALTH CHECK
 app.get("/health", (req, res) => {
   res.json({
-    status: "running",
-    time: new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }),
-    adminPhone: process.env.ADMIN_PHONE ? "✅ Set" : "❌ Missing",
-    accessToken: process.env.ACCESS_TOKEN ? "✅ Set" : "❌ Missing",
-    sheetId: process.env.SHEET_ID ? "✅ Set" : "❌ Missing",
+    status:      "running",
+    time:        new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }),
+    adminPhone:  process.env.ADMIN_PHONE   ? "✅ Set" : "❌ Missing",
+    accessToken: process.env.ACCESS_TOKEN  ? "✅ Set" : "❌ Missing",
+    sheetId:     process.env.SHEET_ID      ? "✅ Set" : "❌ Missing",
   });
 });
 
-
-// ── 6. START SERVER ──────────────────────────────────────────
+// ── 6. START SERVER
 const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, async () => {
-  console.log(`🚀 PSV Bot server running on port ${PORT}`);
-  await testConnection(); // Check Google Sheets on startup
+  logger.info(`🚀 PSV Sports Academy Bot running on port ${PORT}`);
+  await testConnection();
 });
