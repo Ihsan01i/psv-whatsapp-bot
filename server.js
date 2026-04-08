@@ -28,6 +28,10 @@ const app = express();
 app.use(bodyParser.json());
 app.use(cors());
 
+const path = require("path");
+
+app.use(express.static(path.join(__dirname)));
+
 // ── Optional: simple API key guard for admin routes ───────────
 function requireAdminKey(req, res, next) {
   const key = req.headers["x-admin-key"] || req.query.adminKey;
