@@ -193,14 +193,6 @@ app.get("/health", (req, res) => {
 });
 
 // ────────────────────────────────────────────────────────────
-// 7. START SERVER
-// ────────────────────────────────────────────────────────────
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, async () => {
-  logger.info(`🚀 PSV Sports Academy Bot running on port ${PORT}`);
-  await testConnection().catch(() => logger.warn("Sheets offline — Supabase is primary"));
-});
-// ────────────────────────────────────────────────────────────
 // 7. Export Leads
 // ────────────────────────────────────────────────────────────
 
@@ -284,4 +276,13 @@ app.get("/api/export-count", async (req, res) => {
     console.error(err);
     res.status(500).json({ error: err.message });
   }
+});
+
+// ────────────────────────────────────────────────────────────
+// 9. START SERVER
+// ────────────────────────────────────────────────────────────
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, async () => {
+  logger.info(`🚀 PSV Sports Academy Bot running on port ${PORT}`);
+  await testConnection().catch(() => logger.warn("Sheets offline — Supabase is primary"));
 });
