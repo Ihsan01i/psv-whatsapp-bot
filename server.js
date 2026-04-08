@@ -29,7 +29,6 @@ app.use(bodyParser.json());
 app.use(cors());
 
 const path = require("path");
-
 app.use(express.static(path.join(__dirname)));
 
 // ── Optional: simple API key guard for admin routes ───────────
@@ -202,60 +201,63 @@ app.listen(PORT, async () => {
   await testConnection().catch(() => logger.warn("Sheets offline — Supabase is primary"));
 });
 // ────────────────────────────────────────────────────────────
-// 8. Export Leads
+// 8. Export Count
 // ────────────────────────────────────────────────────────────
 
-app.get("/export-leads", async (req, res) => {
+app.get("/api/export-count", async (req, res) => {
   try {
     const supabase = require("./services/db");
 
-    // 1. Get pending leads
     const { data, error } = await supabase
       .from("leads")
-      .select("*")
+      .select("sport_key")
       .eq("crm_uploaded", false);
 
     if (error) throw error;
 
-    if (!data || data.length === 0) {
-      return res.send("No new leads to export");
-    }
-
-    // 2. Convert to CSV
-    const csvRows = [
-      "Name,Phone,Location"
-    ];
-
-    data.forEach(lead => {
-      csvRows.push(
-        `${lead.name},${lead.phone},${lead.location || ""}`
-      );
+    const breakdown = {};
+    data.forEach(l => {
+      breakdown[l.sport_key] = (breakdown[l.sport_key] || 0) + 1;
     });
 
-    const csv = csvRows.join("\n");
-
-    // 3. Send CSV as download
-    res.setHeader("Content-Type", "text/csv");
-    res.setHeader(
-      "Content-Disposition",
-      "attachment; filename=leads.csv"
-    );
-
-    res.send(csv);
-
-    // 4. Mark as uploaded AFTER sending
-    const ids = data.map(l => l.id);
-
-    await supabase
-      .from("leads")
-      .update({
-        crm_uploaded: true,
-        crm_uploaded_at: new Date()
-      })
-      .in("id", ids);
+    res.json({
+      total: data.length,
+      breakdown
+    });
 
   } catch (err) {
-    console.error("Export error:", err.message);
-    res.status(500).send("Export failed");
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ────────────────────────────────────────────────────────────
+// 8. Export Count
+// ────────────────────────────────────────────────────────────
+
+app.get("/api/export-count", async (req, res) => {
+  try {
+    const supabase = require("./services/db");
+
+    const { data, error } = await supabase
+      .from("leads")
+      .select("sport_key")
+      .eq("crm_uploaded", false);
+
+    if (error) throw error;
+
+    const breakdown = {};
+    data.forEach(l => {
+      breakdown[l.sport_key] = (breakdown[l.sport_key] || 0) + 1;
+    });
+
+    res.json({
+      total: data.length,
+      breakdown
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
   }
 });
