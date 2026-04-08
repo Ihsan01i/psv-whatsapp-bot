@@ -201,40 +201,64 @@ app.listen(PORT, async () => {
   await testConnection().catch(() => logger.warn("Sheets offline — Supabase is primary"));
 });
 // ────────────────────────────────────────────────────────────
-// 8. Export Count
+// 7. Export Leads
 // ────────────────────────────────────────────────────────────
 
-app.get("/api/export-count", async (req, res) => {
+app.get("/api/export-leads", requireAdminKey, async (req, res) => {
   try {
     const supabase = require("./services/db");
+    const { sport } = req.query;
 
-    const { data, error } = await supabase
+    let query = supabase
       .from("leads")
-      .select("sport_key")
+      .select("*")
       .eq("crm_uploaded", false);
 
+    if (sport && sport !== "all") {
+      query = query.eq("sport_key", sport);
+    }
+
+    const { data, error } = await query;
     if (error) throw error;
 
-    const breakdown = {};
+    const rows = ["Name,Phone,Location"];
     data.forEach(l => {
-      breakdown[l.sport_key] = (breakdown[l.sport_key] || 0) + 1;
+      rows.push(`${l.name},${l.phone},${l.location || ""}`);
     });
 
-    res.json({
-      total: data.length,
-      breakdown
-    });
+    const csv = rows.join("\n");
+
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename=leads_${sport}.csv`
+    );
+    res.setHeader("X-Lead-Count", data.length);
+
+    res.send(csv);
+
+    const ids = data.map(l => l.id);
+
+    if (ids.length > 0) {
+      await supabase
+        .from("leads")
+        .update({
+          crm_uploaded: true,
+          crm_uploaded_at: new Date()
+        })
+        .in("id", ids);
+    }
 
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Export failed" });
   }
 });
 
 // ────────────────────────────────────────────────────────────
 // 8. Export Count
-// ────────────────────────────────────────────────────────────
 
+// ────────────────────────────────────────────────────────────
 app.get("/api/export-count", async (req, res) => {
   try {
     const supabase = require("./services/db");
