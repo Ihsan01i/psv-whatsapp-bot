@@ -251,7 +251,7 @@ app.get("/api/export-leads", requireAdminKey, async (req, res) => {
 // 8. Export Count
 
 // ────────────────────────────────────────────────────────────
-app.get("/api/export-count", async (req, res) => {
+app.get("/api/export-count", requireAdminKey, async (req, res) => {
   try {
     const supabase = require("./services/db");
 
