@@ -12,6 +12,7 @@
 const supabase            = require("./db");
 const { sendTextMessage } = require("../whatsapp");
 const logger              = require("../utils/logger");
+const { normalizePhone }  = require("../utils/phone");
 
 const ADMIN_PHONE = process.env.ADMIN_PHONE;
 
@@ -20,17 +21,16 @@ const ADMIN_PHONE = process.env.ADMIN_PHONE;
 // WhatsApp numbers must be E.164 without the "+" e.g. "919876543210"
 // ─────────────────────────────────────────────────────────────
 function normalisePhone(raw) {
-  // Strip any non-digit characters
-  const digits = String(raw || "").replace(/\D/g, "");
-
-  // Already has country code (12 digits for India: 91 + 10)
-  if (digits.length === 12 && digits.startsWith("91")) return digits;
-
-  // 10-digit Indian mobile number — prepend country code
-  if (digits.length === 10) return `91${digits}`;
-
-  // Return as-is for other formats (international leads)
-  return digits;
+  try {
+    return normalizePhone(raw, "IN");
+  } catch (err) {
+    logger.warn(`[Lead] Invalid phone fallback: ${raw}`);
+    // Fallback if libphonenumber fails:
+    const digits = String(raw || "").replace(/\D/g, "");
+    if (digits.length === 12 && digits.startsWith("91")) return digits;
+    if (digits.length === 10) return `91${digits}`;
+    return digits;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────

@@ -15,6 +15,7 @@ require("dotenv").config();
 const express    = require("express");
 const bodyParser = require("body-parser");
 const cors       = require("cors");
+const rateLimit  = require("express-rate-limit");
 
 const { handleIncomingMessage }    = require("./bot");
 const { sendTextMessage }          = require("./whatsapp");
@@ -29,7 +30,14 @@ app.use(bodyParser.json());
 app.use(cors());
 
 const path = require("path");
-app.use(express.static(path.join(__dirname)));
+app.use(express.static(path.join(__dirname, "public")));
+
+// ── Rate Limits ───────────────────────────────────────────────
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, 
+  max: 100, 
+  message: { success: false, message: "Too many requests, please try again later." }
+});
 
 // ── Optional: simple API key guard for admin routes ───────────
 function requireAdminKey(req, res, next) {
@@ -79,7 +87,7 @@ app.post("/webhook", async (req, res) => {
 // ────────────────────────────────────────────────────────────
 // 3. WEBSITE LEAD SUBMISSION  ← Updated for Supabase
 // ────────────────────────────────────────────────────────────
-app.post("/submit-lead", async (req, res) => {
+app.post("/submit-lead", apiLimiter, async (req, res) => {
   try {
     const { name, phone, sport, age, time, location } = req.body;
 
@@ -213,9 +221,18 @@ app.get("/api/export-leads", requireAdminKey, async (req, res) => {
     const { data, error } = await query;
     if (error) throw error;
 
+    function escapeCSV(str) {
+      if (!str) return "";
+      const s = String(str);
+      if (s.includes(",") || s.includes('"') || s.includes("\n")) {
+        return `"${s.replace(/"/g, '""')}"`;
+      }
+      return s;
+    }
+
     const rows = ["Name,Phone,Location"];
     data.forEach(l => {
-      rows.push(`${l.name},${l.phone},${l.location || ""}`);
+      rows.push(`${escapeCSV(l.name)},${escapeCSV(l.phone)},${escapeCSV(l.location)}`);
     });
 
     const csv = rows.join("\n");
@@ -236,7 +253,7 @@ app.get("/api/export-leads", requireAdminKey, async (req, res) => {
         .from("leads")
         .update({
           crm_uploaded: true,
-          crm_uploaded_at: new Date()
+          crm_uploaded_at: new Date().toISOString()
         })
         .in("id", ids);
     }
