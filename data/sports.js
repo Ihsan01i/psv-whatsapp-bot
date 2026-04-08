@@ -76,7 +76,6 @@ const sports = {
 
   archery: {
     name: "🏹 Archery",
-    description: "Mon–Fri | 4–6 PM",
     hasSubOptions: false,
     tabName: "Archery",
     message:
@@ -95,7 +94,6 @@ const sports = {
 
 basketball: {
   name: "🏀 Basketball",
-  description: "Kids & Adults batches",
   hasSubOptions: false,
   tabName: "Basketball",
   message:
@@ -133,7 +131,6 @@ basketball: {
 
   roller_skating: {
     name: "🛼 Roller Skating",
-    description: "From 3 years | Free demo",
     hasSubOptions: false,
     tabName: "Roller Skating",
     message:

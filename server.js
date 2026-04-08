@@ -197,3 +197,61 @@ app.listen(PORT, async () => {
   logger.info(`🚀 PSV Sports Academy Bot running on port ${PORT}`);
   await testConnection().catch(() => logger.warn("Sheets offline — Supabase is primary"));
 });
+// ────────────────────────────────────────────────────────────
+// 8. Export Leads
+// ────────────────────────────────────────────────────────────
+
+app.get("/export-leads", async (req, res) => {
+  try {
+    const supabase = require("./services/db");
+
+    // 1. Get pending leads
+    const { data, error } = await supabase
+      .from("leads")
+      .select("*")
+      .eq("crm_uploaded", false);
+
+    if (error) throw error;
+
+    if (!data || data.length === 0) {
+      return res.send("No new leads to export");
+    }
+
+    // 2. Convert to CSV
+    const csvRows = [
+      "Name,Phone,Location"
+    ];
+
+    data.forEach(lead => {
+      csvRows.push(
+        `${lead.name},${lead.phone},${lead.location || ""}`
+      );
+    });
+
+    const csv = csvRows.join("\n");
+
+    // 3. Send CSV as download
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader(
+      "Content-Disposition",
+      "attachment; filename=leads.csv"
+    );
+
+    res.send(csv);
+
+    // 4. Mark as uploaded AFTER sending
+    const ids = data.map(l => l.id);
+
+    await supabase
+      .from("leads")
+      .update({
+        crm_uploaded: true,
+        crm_uploaded_at: new Date()
+      })
+      .in("id", ids);
+
+  } catch (err) {
+    console.error("Export error:", err.message);
+    res.status(500).send("Export failed");
+  }
+});
