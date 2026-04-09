@@ -19,7 +19,6 @@ const rateLimit  = require("express-rate-limit");
 
 const { handleIncomingMessage }    = require("./bot");
 const { sendTextMessage }          = require("./whatsapp");
-const { saveLead, testConnection } = require("./sheets");   // keep during transition
 const { processLead, fetchLeads }  = require("./services/lead");
 const { runBulkSend }              = require("./bulkSender");
 const { normalisePhone }           = require("./services/lead");
@@ -114,19 +113,6 @@ app.post("/submit-lead", apiLimiter, async (req, res) => {
     // Save to Supabase + notify admin — both fault-tolerant
     await processLead(session, tabName);
 
-    // Keep saving to Sheets during the transition period
-    // Remove this block once you've fully moved to Supabase:
-    try {
-      await saveLead({
-        customerName: name,
-        mobileNumber: normalisedPhone,
-        leadCategory: sport,
-        address:      location || "",
-      });
-    } catch (sheetErr) {
-      logger.warn("[Server] Sheets save failed (non-fatal):", sheetErr.message);
-    }
-
     res.json({ success: true });
   } catch (err) {
     logger.error("Website lead error:", err.message);
@@ -193,7 +179,6 @@ app.get("/health", (req, res) => {
     time:           new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }),
     adminPhone:     process.env.ADMIN_PHONE       ? "✅ Set" : "❌ Missing",
     accessToken:    process.env.ACCESS_TOKEN      ? "✅ Set" : "❌ Missing",
-    sheetId:        process.env.SHEET_ID          ? "✅ Set" : "⚠️ Optional",
     supabaseUrl:    process.env.SUPABASE_URL      ? "✅ Set" : "❌ Missing",
     supabaseKey:    process.env.SUPABASE_SERVICE_KEY ? "✅ Set" : "❌ Missing",
     adminApiKey:    process.env.ADMIN_API_KEY     ? "✅ Set" : "⚠️ No admin API key",
@@ -301,5 +286,4 @@ app.get("/api/export-count", requireAdminKey, async (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
   logger.info(`🚀 PSV Sports Academy Bot running on port ${PORT}`);
-  await testConnection().catch(() => logger.warn("Sheets offline — Supabase is primary"));
 });

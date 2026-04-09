@@ -9,9 +9,9 @@
  *   hasSubOptions — true = show a sub-menu before asking name (e.g. Badminton)
  *   options      — Sub-option map (only when hasSubOptions: true)
  *     └─ title   — Button label in the WhatsApp button message
- *     └─ tabName — Google Sheets tab to save this lead to
+ *     └─ tabName — Supabase tab tracking category to categorise this lead
  *     └─ message — Info text sent to user after lead is collected
- *   tabName      — (direct sports only) Google Sheets tab name
+ *   tabName      — (direct sports only) Supabase tab tracking category
  *   message      — (direct sports only) Info text sent after lead collection
  */
 
