@@ -12,24 +12,31 @@
 
 require("dotenv").config();
 
-const express    = require("express");
+const express = require("express");
 const bodyParser = require("body-parser");
-const cors       = require("cors");
-const rateLimit    = require("express-rate-limit");
-const jwt          = require("jsonwebtoken");
+const cors = require("cors");
+const rateLimit = require("express-rate-limit");
+const jwt = require("jsonwebtoken");
 const cookieParser = require("cookie-parser");
-const helmet       = require("helmet");
+const helmet = require("helmet");
 const { OAuth2Client } = require("google-auth-library");
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 
-const { handleIncomingMessage }    = require("./bot");
-const { sendTextMessage }          = require("./whatsapp");
-const { processLead, fetchLeads }  = require("./services/lead");
-const { startWorker }              = require("./services/worker");
-const { normalisePhone }           = require("./services/lead");
-const supabase                     = require("./services/db");
-const logger                       = require("./utils/logger");
+const { handleIncomingMessage } = require("./bot");
+const { sendTextMessage } = require("./whatsapp");
+const { processLead, fetchLeads } = require("./services/lead");
+const { startWorker } = require("./services/worker");
+const { normalisePhone } = require("./services/lead");
+const supabase = require("./services/db");
+const logger = require("./utils/logger");
+
+app.use((req, res, next) => {
+  if (req.headers["x-forwarded-proto"] !== "https") {
+    return res.redirect(`https://${req.headers.host}${req.url}`);
+  }
+  next();
+});
 
 if (!process.env.VERIFY_TOKEN) {
   throw new Error("FATAL: VERIFY_TOKEN environment variable is missing.");
@@ -43,14 +50,14 @@ app.use(helmet({
   crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" }, // Required for Google Sign-In popup flow
   contentSecurityPolicy: {
     directives: {
-      defaultSrc:  ["'self'"],
-      scriptSrc:     ["'self'", "'unsafe-inline'", "https://accounts.google.com", "https://apis.google.com", "https://www.gstatic.com"],
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "https://accounts.google.com", "https://apis.google.com", "https://www.gstatic.com"],
       scriptSrcAttr: ["'unsafe-inline'"], // Required: Helmet blocks inline onclick= by default via script-src-attr: none
-      connectSrc:  ["'self'", "https://accounts.google.com", "https://oauth2.googleapis.com"],
-      frameSrc:    ["https://accounts.google.com", "https://www.google.com"],
-      imgSrc:      ["'self'", "data:", "https://lh3.googleusercontent.com", "https://www.gstatic.com"],
-      styleSrc:    ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com", "https://accounts.google.com"],
-      fontSrc:     ["'self'", "https://fonts.gstatic.com"],
+      connectSrc: ["'self'", "https://accounts.google.com", "https://oauth2.googleapis.com"],
+      frameSrc: ["https://accounts.google.com", "https://www.google.com"],
+      imgSrc: ["'self'", "data:", "https://lh3.googleusercontent.com", "https://www.gstatic.com"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com", "https://accounts.google.com"],
+      fontSrc: ["'self'", "https://fonts.gstatic.com"],
     },
   },
 }));
@@ -105,14 +112,14 @@ app.use(express.static(path.join(__dirname, "public")));
 
 // ── Rate Limits ───────────────────────────────────────────────
 const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, 
-  max: 100, 
+  windowMs: 15 * 60 * 1000,
+  max: 100,
   message: { success: false, message: "Too many requests, please try again later." }
 });
 
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, 
-  max: 20, 
+  windowMs: 15 * 60 * 1000,
+  max: 20,
   message: { success: false, error: "Too many login attempts, please try again later." }
 });
 
@@ -147,7 +154,7 @@ async function safeLog(queryPromise) {
 // ── Google Login Endpoint ───────────────────────────────────────
 app.post("/api/admin/google-login", authLimiter, async (req, res) => {
   const { credential } = req.body;
-  
+
   if (!credential) {
     return res.status(400).json({ error: "Google credential missing" });
   }
@@ -157,7 +164,7 @@ app.post("/api/admin/google-login", authLimiter, async (req, res) => {
       idToken: credential,
       audience: process.env.GOOGLE_CLIENT_ID
     });
-    
+
     const payload = ticket.getPayload();
     const userEmail = payload.email;
 
@@ -183,10 +190,10 @@ app.post("/api/admin/google-login", authLimiter, async (req, res) => {
 
     // Email matches, issue our own session token valid for 6h
     const SESSION_DURATION_MS = 6 * 60 * 60 * 1000;
-    const token = jwt.sign({ email: userEmail }, process.env.JWT_SECRET, { 
-      expiresIn: Math.floor(SESSION_DURATION_MS / 1000) 
+    const token = jwt.sign({ email: userEmail }, process.env.JWT_SECRET, {
+      expiresIn: Math.floor(SESSION_DURATION_MS / 1000)
     });
-    
+
     res.cookie("admin_token", token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production" || !!process.env.RAILWAY_ENVIRONMENT,
@@ -229,8 +236,8 @@ app.post("/api/admin/logout", (req, res) => {
 // ────────────────────────────────────────────────────────────
 app.get("/webhook", (req, res) => {
   const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
-  const mode      = req.query["hub.mode"];
-  const token     = req.query["hub.verify_token"];
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
 
   if (mode === "subscribe" && token === VERIFY_TOKEN) {
@@ -252,7 +259,7 @@ app.post("/webhook", verifyWebhookSignature, async (req, res) => {
       body.object === "whatsapp_business_account" &&
       body.entry?.[0]?.changes?.[0]?.value?.messages?.[0]
     ) {
-      const change  = body.entry[0].changes[0].value;
+      const change = body.entry[0].changes[0].value;
       const message = change.messages[0];
       const contact = change.contacts?.[0];
       await handleIncomingMessage(message, contact);
@@ -278,11 +285,11 @@ app.post("/submit-lead", apiLimiter, async (req, res) => {
     // Build a session-like object compatible with processLead()
     const session = {
       name,
-      phone:    normalisedPhone,
+      phone: normalisedPhone,
       sportKey: sport,
       location: location || "",
-      waName:   "",
-      source:   "website",
+      waName: "",
+      source: "website",
     };
 
     // tabName for website leads = sport value as received
@@ -318,9 +325,9 @@ app.get("/api/admin/leads", requireAuth, async (req, res) => {
 
     const leads = await fetchLeads({
       sportKey: sportKey || undefined,
-      since:    safeSince,
-      source:   source   || undefined,
-      limit:    safeLimit > 0 ? safeLimit : 500,
+      since: safeSince,
+      source: source || undefined,
+      limit: safeLimit > 0 ? safeLimit : 500,
     });
     res.json({ success: true, count: leads.length, leads });
   } catch (err) {
@@ -335,7 +342,7 @@ app.get("/api/admin/leads", requireAuth, async (req, res) => {
 app.post("/api/admin/bulk-send", requireAuth, async (req, res) => {
   try {
     const { sportKey, templateKey, dryRun, limit } = req.body;
-    
+
     const { TEMPLATES } = require("./bulkSender");
     const VALID_TEMPLATE_KEYS = Object.keys(TEMPLATES);
 
@@ -359,10 +366,10 @@ app.post("/api/admin/bulk-send", requireAuth, async (req, res) => {
 
     // Create Async Job
     const payload = {
-      sportKey:    sportKey    || null,
+      sportKey: sportKey || null,
       templateKey: safeTemplateKey,
-      dryRun:      dryRun      ?? false,
-      limit:       safeLimit,
+      dryRun: dryRun ?? false,
+      limit: safeLimit,
     };
 
     const { data: job, error } = await supabase
@@ -407,8 +414,8 @@ app.get("/api/admin/jobs", requireAuth, async (req, res) => {
 // ────────────────────────────────────────────────────────────
 app.get("/health", (req, res) => {
   res.json({
-    status:         "ok",
-    time:           new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })
+    status: "ok",
+    time: new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })
   });
 });
 
@@ -420,8 +427,8 @@ let exportLockActive = false;
 
 app.get("/api/admin/export-leads", requireAuth, async (req, res) => {
   if (exportLockActive) {
-    return res.status(409).json({ 
-      error: "An export is already in progress. Please wait for it to complete." 
+    return res.status(409).json({
+      error: "An export is already in progress. Please wait for it to complete."
     });
   }
 
@@ -432,7 +439,7 @@ app.get("/api/admin/export-leads", requireAuth, async (req, res) => {
     const userEmail = req.user?.email || "Unknown admin";
     const sport = req.query.sport || 'all';
     logger.info(`[ADMIN ACTION] ${userEmail} exported leads for sport: ${sport}`);
-    
+
     // DB Audit Log
     await safeLog(supabase.from("admin_logs").insert({
       admin_email: userEmail,
@@ -481,13 +488,13 @@ app.get("/api/admin/export-leads", requireAuth, async (req, res) => {
 
     // Stream by pages
     const PAGE_SIZE = 1000;
-    
+
     for (let offset = 0; offset < count; offset += PAGE_SIZE) {
       const { data, error } = await baseQuery().range(offset, offset + PAGE_SIZE - 1);
 
       if (error) {
         logger.error(`[Export] Error paginating leads at offset ${offset}:`, error.message);
-        break; 
+        break;
       }
 
       for (const l of data) {
@@ -517,7 +524,7 @@ app.get("/api/admin/export-leads", requireAuth, async (req, res) => {
   } catch (err) {
     logger.error("Export failed", err);
     if (!res.headersSent) {
-       res.status(500).json({ error: "Export failed" });
+      res.status(500).json({ error: "Export failed" });
     }
   } finally {
     exportLockActive = false; // Always released, even on crash
@@ -552,7 +559,7 @@ app.get("/api/admin/export-count", requireAuth, async (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
   logger.info(`🚀 PSV Sports Academy Bot running on port ${PORT}`);
-  
+
   // Start the background job queue if enabled
   const WORKER_ENABLED = process.env.WORKER_ENABLED !== "false";
   if (WORKER_ENABLED) {
