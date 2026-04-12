@@ -28,7 +28,12 @@ const { sendTextMessage }          = require("./whatsapp");
 const { processLead, fetchLeads }  = require("./services/lead");
 const { startWorker }              = require("./services/worker");
 const { normalisePhone }           = require("./services/lead");
+const supabase                     = require("./services/db");
 const logger                       = require("./utils/logger");
+
+if (!process.env.VERIFY_TOKEN) {
+  throw new Error("FATAL: VERIFY_TOKEN environment variable is missing.");
+}
 
 const app = express();
 
@@ -47,7 +52,39 @@ app.use(helmet({
   },
 }));
 
-app.use(bodyParser.json());
+app.use(bodyParser.json({
+  verify: (req, res, buf) => {
+    if (req.originalUrl === "/webhook") {
+      req.rawBody = buf; // Stash the raw buffer for HMAC
+    }
+  }
+}));
+
+const crypto = require("crypto");
+
+function verifyWebhookSignature(req, res, next) {
+  const signature = req.headers["x-hub-signature-256"];
+  if (!signature) {
+    return res.status(403).json({ error: "Missing signature" });
+  }
+
+  const appSecret = process.env.WHATSAPP_APP_SECRET;
+  if (!appSecret) {
+    // Fail closed — do not allow requests if secret is not configured
+    return res.status(500).json({ error: "Server misconfiguration" });
+  }
+
+  // IMPORTANT: use the raw body buffer, not the parsed JSON
+  const expectedSig = "sha256=" + crypto
+    .createHmac("sha256", appSecret)
+    .update(req.rawBody)
+    .digest("hex");
+
+  if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSig))) {
+    return res.status(403).json({ error: "Invalid signature" });
+  }
+  next();
+}
 app.use(cookieParser());
 app.use(cors({
   origin: [
@@ -112,39 +149,45 @@ app.post("/api/admin/google-login", authLimiter, async (req, res) => {
     // Parse comma-separated emails from .env (e.g. "admin1@psv.com, admin2@psv.com")
     const allowedEmails = (process.env.ADMIN_EMAIL || "")
       .split(",")
-      .map(e => e.trim().toLowerCase());
+      .map(e => e.trim().toLowerCase())
+      .filter(Boolean);
 
-    const supabase = require("./services/db");
+    if (allowedEmails.length === 0) {
+      throw new Error("FATAL: ADMIN_EMAIL is not configured with any valid addresses.");
+    }
 
     if (!userEmail || !allowedEmails.includes(userEmail.toLowerCase())) {
       logger.warn(`Google login attempt with unauthorized email: ${userEmail}`);
-      supabase.from("admin_logs").insert({
+      await supabase.from("admin_logs").insert({
         admin_email: userEmail || "unknown",
         action: "FAILED_LOGIN",
         details: JSON.stringify({ ip: req.ip, userAgent: req.headers["user-agent"], forwarded: req.headers["x-forwarded-for"] })
-      }).then();
+      }).catch(err => logger.error("Audit log failed:", err.message));
       return res.status(403).json({ error: "Email not authorized" });
     }
 
     // Email matches, issue our own session token valid for 6h
-    const token = jwt.sign({ email: userEmail }, process.env.JWT_SECRET, { expiresIn: "6h" });
+    const SESSION_DURATION_MS = 6 * 60 * 60 * 1000;
+    const token = jwt.sign({ email: userEmail }, process.env.JWT_SECRET, { 
+      expiresIn: Math.floor(SESSION_DURATION_MS / 1000) 
+    });
     
     res.cookie("admin_token", token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production" || !!process.env.RAILWAY_ENVIRONMENT,
       sameSite: "strict",
       path: "/",
-      maxAge: 6 * 60 * 60 * 1000 // 6 hours
+      maxAge: SESSION_DURATION_MS // 6 hours
     });
 
     res.json({ success: true, email: userEmail });
 
     // DB Audit Log
-    supabase.from("admin_logs").insert({
+    await supabase.from("admin_logs").insert({
       admin_email: userEmail,
       action: "LOGIN",
       details: "Google Auth successful"
-    }).then(({ error }) => { if (error) logger.error("Audit log failed:", error.message) });
+    }).catch(err => logger.error("Audit log failed:", err.message));
   } catch (err) {
     logger.error("Google Auth verification failed:", err.message);
     res.status(500).json({ error: "Authentication failed" });
@@ -156,8 +199,13 @@ app.get("/api/admin/session", requireAuth, (req, res) => {
   res.json({ success: true, email: req.user.email });
 });
 
-app.post("/api/admin/logout", (req, res) => {
-  res.clearCookie("admin_token");
+app.post("/api/admin/logout", requireAuth, (req, res) => {
+  res.clearCookie("admin_token", {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production" || !!process.env.RAILWAY_ENVIRONMENT,
+    sameSite: "strict",
+    path: "/"
+  });
   res.json({ success: true });
 });
 
@@ -165,7 +213,7 @@ app.post("/api/admin/logout", (req, res) => {
 // 1. WEBHOOK VERIFICATION
 // ────────────────────────────────────────────────────────────
 app.get("/webhook", (req, res) => {
-  const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "psv_sports_token";
+  const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
   const mode      = req.query["hub.mode"];
   const token     = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
@@ -181,7 +229,7 @@ app.get("/webhook", (req, res) => {
 // ────────────────────────────────────────────────────────────
 // 2. RECEIVE WHATSAPP MESSAGES
 // ────────────────────────────────────────────────────────────
-app.post("/webhook", async (req, res) => {
+app.post("/webhook", verifyWebhookSignature, async (req, res) => {
   res.sendStatus(200);
   try {
     const body = req.body;
@@ -245,11 +293,19 @@ app.post("/submit-lead", apiLimiter, async (req, res) => {
 app.get("/api/admin/leads", requireAuth, async (req, res) => {
   try {
     const { sportKey, since, source, limit } = req.query;
+
+    const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T[\d:.Z+-]+)?$/;
+    const safeSince = since && ISO_DATE_RE.test(since) ? since : undefined;
+
+    const MAX_QUERY_LIMIT = 1000;
+    const parsedLimit = limit ? parseInt(limit, 10) : 500;
+    const safeLimit = isNaN(parsedLimit) ? 500 : Math.min(parsedLimit, MAX_QUERY_LIMIT);
+
     const leads = await fetchLeads({
       sportKey: sportKey || undefined,
-      since:    since    || undefined,
+      since:    safeSince,
       source:   source   || undefined,
-      limit:    limit ? parseInt(limit, 10) : 500,
+      limit:    safeLimit > 0 ? safeLimit : 500,
     });
     res.json({ success: true, count: leads.length, leads });
   } catch (err) {
@@ -264,23 +320,34 @@ app.get("/api/admin/leads", requireAuth, async (req, res) => {
 app.post("/api/admin/bulk-send", requireAuth, async (req, res) => {
   try {
     const { sportKey, templateKey, dryRun, limit } = req.body;
+    
+    const { TEMPLATES } = require("./bulkSender");
+    const VALID_TEMPLATE_KEYS = Object.keys(TEMPLATES);
+
+    const parsedLimit = parseInt(limit, 10);
+    const safeLimit = (!isNaN(parsedLimit) && parsedLimit > 0)
+      ? Math.min(parsedLimit, 500)
+      : 100;
+
+    const safeTemplateKey = templateKey || "general_followup";
+    if (!VALID_TEMPLATE_KEYS.includes(safeTemplateKey)) {
+      return res.status(400).json({ error: `Invalid template. Must be one of: ${VALID_TEMPLATE_KEYS.join(", ")}` });
+    }
+
     const userEmail = req.user?.email || "Unknown admin";
-    
-    const supabase = require("./services/db");
-    
     // Audit Logging
-    supabase.from("admin_logs").insert({
+    await supabase.from("admin_logs").insert({
       admin_email: userEmail,
       action: "BULK_SEND_TRIGGER",
-      details: JSON.stringify({ sportKey, templateKey, dryRun, limit, ip: req.ip })
-    }).then();
+      details: JSON.stringify({ sportKey, templateKey: safeTemplateKey, dryRun, limit: safeLimit, ip: req.ip })
+    }).catch(err => logger.error("Audit log failed:", err.message));
 
     // Create Async Job
     const payload = {
       sportKey:    sportKey    || null,
-      templateKey: templateKey || "general_followup",
+      templateKey: safeTemplateKey,
       dryRun:      dryRun      ?? false,
-      limit:       limit       || 100,
+      limit:       safeLimit,
     };
 
     const { data: job, error } = await supabase
@@ -307,7 +374,6 @@ app.post("/api/admin/bulk-send", requireAuth, async (req, res) => {
 // ────────────────────────────────────────────────────────────
 app.get("/api/admin/jobs", requireAuth, async (req, res) => {
   try {
-    const supabase = require("./services/db");
     const { data, error } = await supabase
       .from("jobs")
       .select("*")
@@ -326,13 +392,8 @@ app.get("/api/admin/jobs", requireAuth, async (req, res) => {
 // ────────────────────────────────────────────────────────────
 app.get("/health", (req, res) => {
   res.json({
-    status:         "running",
-    time:           new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }),
-    adminPhone:     process.env.ADMIN_PHONE       ? "✅ Set" : "❌ Missing",
-    accessToken:    process.env.ACCESS_TOKEN      ? "✅ Set" : "❌ Missing",
-    supabaseUrl:    process.env.SUPABASE_URL      ? "✅ Set" : "❌ Missing",
-    supabaseKey:    process.env.SUPABASE_SERVICE_KEY ? "✅ Set" : "❌ Missing",
-    adminApiKey:    process.env.ADMIN_API_KEY     ? "✅ Set" : "⚠️ No admin API key",
+    status:         "ok",
+    time:           new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })
   });
 });
 
@@ -340,32 +401,59 @@ app.get("/health", (req, res) => {
 // 7. Export Leads
 // ────────────────────────────────────────────────────────────
 
+let exportLockActive = false;
+
 app.get("/api/admin/export-leads", requireAuth, async (req, res) => {
+  if (exportLockActive) {
+    return res.status(409).json({ 
+      error: "An export is already in progress. Please wait for it to complete." 
+    });
+  }
+
+  exportLockActive = true;
+  const exportedIds = [];
+
   try {
     const userEmail = req.user?.email || "Unknown admin";
     const sport = req.query.sport || 'all';
     logger.info(`[ADMIN ACTION] ${userEmail} exported leads for sport: ${sport}`);
     
-    const supabase = require("./services/db");
-    
     // DB Audit Log
-    supabase.from("admin_logs").insert({
+    await supabase.from("admin_logs").insert({
       admin_email: userEmail,
       action: "EXPORT_LEADS",
       details: `Exported sport: ${sport}`
-    }).then(({ error }) => { if (error) logger.error("Audit log failed:", error.message) });
+    }).catch(err => logger.error("Audit log failed:", err.message));
 
-    let query = supabase
-      .from("leads")
-      .select("*")
-      .eq("crm_uploaded", false);
+    // Stream Setup
+    const baseQuery = () => {
+      let q = supabase
+        .from("leads")
+        .select("id, name, phone, location", { count: "exact" })
+        .eq("crm_uploaded", false)
+        .order("id", { ascending: true }); // Ensure stable sorting for pagination
 
-    if (sport && sport !== "all") {
-      query = query.eq("sport_key", sport);
+      if (sport && sport !== "all") {
+        q = q.eq("sport_key", sport);
+      }
+      return q;
+    };
+
+    // Get total count
+    const { count, error: countErr } = await baseQuery().limit(1);
+    if (countErr) throw countErr;
+
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", `attachment; filename=leads_${sport}.csv`);
+    res.setHeader("X-Lead-Count", count || 0);
+
+    // Write header
+    res.write("Name,Phone,Location\n");
+
+    if (count === 0) {
+      exportLockActive = false;
+      return res.end();
     }
-
-    const { data, error } = await query;
-    if (error) throw error;
 
     function escapeCSV(str) {
       if (!str) return "";
@@ -376,37 +464,49 @@ app.get("/api/admin/export-leads", requireAuth, async (req, res) => {
       return s;
     }
 
-    const rows = ["Name,Phone,Location"];
-    data.forEach(l => {
-      rows.push(`${escapeCSV(l.name)},${escapeCSV(l.phone)},${escapeCSV(l.location)}`);
-    });
+    // Stream by pages
+    const PAGE_SIZE = 1000;
+    
+    for (let offset = 0; offset < count; offset += PAGE_SIZE) {
+      const { data, error } = await baseQuery().range(offset, offset + PAGE_SIZE - 1);
 
-    const csv = rows.join("\n");
+      if (error) {
+        logger.error(`[Export] Error paginating leads at offset ${offset}:`, error.message);
+        break; 
+      }
 
-    res.setHeader("Content-Type", "text/csv");
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename=leads_${sport}.csv`
-    );
-    res.setHeader("X-Lead-Count", data.length);
-
-    res.send(csv);
-
-    const ids = data.map(l => l.id);
-
-    if (ids.length > 0) {
-      await supabase
-        .from("leads")
-        .update({
-          crm_uploaded: true,
-          crm_uploaded_at: new Date().toISOString()
-        })
-        .in("id", ids);
+      for (const l of data) {
+        res.write(`${escapeCSV(l.name)},${escapeCSV(l.phone)},${escapeCSV(l.location)}\n`);
+        exportedIds.push(l.id);
+      }
     }
 
+    // Mark as uploaded BEFORE releasing the lock, while we still own it
+    if (exportedIds.length > 0) {
+      const CHUNK_SIZE = 500;
+      for (let i = 0; i < exportedIds.length; i += CHUNK_SIZE) {
+        const chunk = exportedIds.slice(i, i + CHUNK_SIZE);
+        await supabase
+          .from("leads")
+          .update({
+            crm_uploaded: true,
+            crm_uploaded_at: new Date().toISOString()
+          })
+          .in("id", chunk)
+          .catch(err => logger.error("[Export] Failed to update chunk:", err.message));
+      }
+    }
+
+    // End stream
+    res.end();
+
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Export failed" });
+    logger.error("Export failed", err);
+    if (!res.headersSent) {
+       res.status(500).json({ error: "Export failed" });
+    }
+  } finally {
+    exportLockActive = false; // Always released, even on crash
   }
 });
 
@@ -415,24 +515,16 @@ app.get("/api/admin/export-leads", requireAuth, async (req, res) => {
 
 app.get("/api/admin/export-count", requireAuth, async (req, res) => {
   try {
-    const supabase = require("./services/db");
-
     const { data, error } = await supabase
-      .from("leads")
-      .select("sport_key")
-      .eq("crm_uploaded", false);
+      .from("pending_leads_stats")
+      .select("*");
 
     if (error) throw error;
 
-    const breakdown = {};
-    data.forEach(l => {
-      breakdown[l.sport_key] = (breakdown[l.sport_key] || 0) + 1;
-    });
+    const breakdown = (data || []).reduce((acc, row) => ({ ...acc, [row.sport_key]: row.count }), {});
+    const total = (data || []).reduce((sum, row) => sum + row.count, 0);
 
-    res.json({
-      total: data.length,
-      breakdown
-    });
+    res.json({ total, breakdown });
 
   } catch (err) {
     console.error(err);
@@ -447,6 +539,11 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
   logger.info(`🚀 PSV Sports Academy Bot running on port ${PORT}`);
   
-  // Start the background job queue
-  startWorker();
+  // Start the background job queue if enabled
+  const WORKER_ENABLED = process.env.WORKER_ENABLED !== "false";
+  if (WORKER_ENABLED) {
+    startWorker();
+  } else {
+    logger.info(`[Worker] Stopped via WORKER_ENABLED=false`);
+  }
 });

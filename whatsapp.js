@@ -7,20 +7,22 @@ require("dotenv").config();
 
 // Read credentials from environment variables (see .env file)
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID; // From Meta Developer Dashboard
-const ACCESS_TOKEN    = process.env.ACCESS_TOKEN;     // Temporary or permanent token
+// NOTE: ACCESS_TOKEN is intentionally NOT cached at module load — read at call time
+// so that secret rotation (Railway redeploy / env update) takes effect immediately.
 
 const API_URL = `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`;
 
 // ── Shared header for all API calls ──────────────────────────
+// Read ACCESS_TOKEN at call-time (not module load) to support live rotation.
 const headers = () => ({
-  Authorization: `Bearer ${ACCESS_TOKEN}`,
+  Authorization: `Bearer ${process.env.ACCESS_TOKEN}`,
   "Content-Type": "application/json",
 });
 
 // ── Helper: Make the API call ─────────────────────────────────
 async function callAPI(payload) {
   try {
-    const res = await axios.post(API_URL, payload, { headers: headers() });
+    const res = await axios.post(API_URL, payload, { headers: headers(), timeout: 30000 });
     console.log(`✅ Message sent | ID: ${res.data.messages?.[0]?.id}`);
     return res.data;
   } catch (err) {

@@ -23,12 +23,12 @@ const supabase = require("./services/db");
 
 // ── Config ────────────────────────────────────────────────────
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
-const ACCESS_TOKEN    = process.env.ACCESS_TOKEN;
+// NOTE: ACCESS_TOKEN is intentionally NOT cached at module load — read at call time
+// so that secret rotation takes effect without a process restart.
 const API_URL         = `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`;
 
 // Delay between each message send (milliseconds).
-// 1000ms = 1 second. Do NOT go below 500ms to avoid rate limits.
-const DELAY_MS = 1000;
+const GLOBAL_SEND_DELAY = 150;
 
 // ── Approved template definitions ─────────────────────────────
 // Each template maps to a pre-approved Meta Business Manager template.
@@ -126,9 +126,10 @@ async function sendTemplateMessage(phone, template, lead) {
   try {
     const res = await axios.post(API_URL, payload, {
       headers: {
-        Authorization:  `Bearer ${ACCESS_TOKEN}`,
+        Authorization:  `Bearer ${process.env.ACCESS_TOKEN}`,
         "Content-Type": "application/json",
       },
+      timeout: 30000, // 30 seconds — fail fast if Meta API hangs
     });
 
     const messageId = res.data?.messages?.[0]?.id;
@@ -139,20 +140,22 @@ async function sendTemplateMessage(phone, template, lead) {
   }
 }
 
-// ── Logging: write result to bulk_send_log table ─────────────
-async function logSendResult(lead, templateName, result) {
-  const { error } = await supabase
-    .from("bulk_send_log")
-    .insert({
-      lead_id:       lead.id,
-      phone:         lead.phone,
-      template_name: templateName,
-      status:        result.success ? "sent" : "failed",
-      wa_message_id: result.messageId || null,
-      error_message: result.error    || null,
-    });
+// ── Logging: Persist Batch to Supabase ───────────────────────
+async function persistBatch(successIds, logs) {
+  if (successIds.length > 0) {
+    const { error } = await supabase
+      .from("leads")
+      .update({ bulk_sent_at: new Date().toISOString() })
+      .in("id", successIds);
+    if (error) logger.error("[BulkSend] Failed to update bulk_sent_at batch:", error.message);
+  }
 
-  if (error) logger.error("[BulkSend] Failed to log send result:", error.message);
+  if (logs.length > 0) {
+    const { error } = await supabase
+      .from("bulk_send_log")
+      .insert(logs);
+    if (error) logger.error("[BulkSend] Failed to log send result batch:", error.message);
+  }
 }
 
 // ── Delay helper ──────────────────────────────────────────────
@@ -185,7 +188,7 @@ async function runBulkSend({
   logger.info(`[BulkSend] Dry run   : ${dryRun}`);
   logger.info(`[BulkSend] Limit     : ${limit}`);
 
-  // 1. Fetch leads from Supabase
+  // 1. fetchLeads
   const leads = await fetchLeads({
     sportKey,
     unMessaged: onlyUnMessaged,
@@ -194,14 +197,21 @@ async function runBulkSend({
 
   if (leads.length === 0) {
     logger.info("[BulkSend] No eligible leads found — nothing to send.");
-    return;
+    return { sent: 0, failed: 0, skipped: 0 };
   }
 
+  return await sendBatch(leads, template, dryRun);
+}
+
+// ── Core: send batch ──────────────────────────────────────────
+async function sendBatch(leads, template, dryRun) {
   logger.info(`[BulkSend] Sending to ${leads.length} lead(s)...`);
 
   const results = { sent: 0, failed: 0, skipped: 0 };
+  let successIds = [];
+  let logs = [];
+  let lastFlushTime = Date.now();
 
-  // 2. Loop with per-message delay
   for (const lead of leads) {
     const phone = lead.phone;
 
@@ -222,21 +232,41 @@ async function runBulkSend({
 
     if (result.success) {
       logger.info(`[BulkSend] ✅ Sent to ${phone} (${lead.name}) — msgId: ${result.messageId}`);
-      await markBulkSent(lead.id);
+      successIds.push(lead.id);
       results.sent++;
     } else {
       logger.error(`[BulkSend] ❌ Failed for ${phone} (${lead.name}): ${result.error}`);
       results.failed++;
     }
 
-    // 4. Log to Supabase (even on failure — for audit trail)
-    await logSendResult(lead, template.name, result);
+    logs.push({
+      lead_id:       lead.id,
+      phone:         lead.phone,
+      template_name: template.name,
+      status:        result.success ? "sent" : "failed",
+      wa_message_id: result.messageId || null,
+      error_message: result.error    || null,
+    });
 
-    // 5. Rate limiting delay
-    await delay(DELAY_MS);
+    // 4. Batch DB writes (flush every 50 or 3 seconds)
+    const timeSinceFlush = Date.now() - lastFlushTime;
+    if (logs.length >= 50 || timeSinceFlush >= 3000) {
+      await persistBatch(successIds, logs);
+      successIds = [];
+      logs = [];
+      lastFlushTime = Date.now();
+    }
+
+    // 5. Global Rate limiting delay
+    await delay(GLOBAL_SEND_DELAY);
   }
 
-  // 3. Summary
+  // Final flush
+  if (logs.length > 0) {
+    await persistBatch(successIds, logs);
+  }
+
+  // Summary
   logger.info(
     `[BulkSend] Done. Sent: ${results.sent} | Failed: ${results.failed} | Skipped: ${results.skipped}`
   );

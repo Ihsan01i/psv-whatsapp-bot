@@ -341,6 +341,15 @@
     };
 
     // ── Helpers ───────────────────────────────────────────────────
+    function escapeHTML(str) {
+      return String(str || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#x27;");
+    }
+
     function toast(msg, type = "info") {
       const el = document.createElement("div");
       el.className = `toast ${type}`;
@@ -426,23 +435,23 @@
         const count = breakdown[sport.key] || 0;
         const card = document.createElement("div");
         card.className = "sport-card";
-        card.id = `card-${sport.key}`;
+        card.id = `card-${escapeHTML(sport.key)}`;
         card.innerHTML = `
       <div class="card-top">
         <span class="card-emoji">${sport.emoji}</span>
         <div>
-          <div class="card-name">${sport.name}</div>
-          <div class="card-key">${sport.key}</div>
+          <div class="card-name">${escapeHTML(sport.name)}</div>
+          <div class="card-key">${escapeHTML(sport.key)}</div>
         </div>
       </div>
       <div class="card-count">
-        <span class="count-num ${count === 0 ? "zero" : ""}" id="count-${sport.key}">${count}</span>
+        <span class="count-num ${count === 0 ? "zero" : ""}" id="count-${escapeHTML(sport.key)}">${count}</span>
         <span class="count-label">pending leads</span>
       </div>
       <button
         class="btn-download"
-        id="btn-${sport.key}"
-        onclick="exportLeads('${sport.key}', this)"
+        id="btn-${escapeHTML(sport.key)}"
+        onclick="exportLeads('${escapeHTML(sport.key)}', this)"
         ${count === 0 ? "disabled" : ""}
       >
         ⬇ Download CSV
@@ -539,9 +548,9 @@
       ${exportLog.map((e) => `
         <tr>
           <td>${e.time}</td>
-          <td>${e.sport}</td>
+          <td>${escapeHTML(e.sport)}</td>
           <td>${e.count}</td>
-          <td>${e.filename}</td>
+          <td>${escapeHTML(e.filename)}</td>
           <td><span class="badge uploaded">Uploaded</span></td>
         </tr>
       `).join("")}

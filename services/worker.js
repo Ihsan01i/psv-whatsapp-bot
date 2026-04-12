@@ -6,32 +6,43 @@ let interval = 5000; // start at 5 seconds
 let isRunning = false;
 let timeoutId = null;
 
+const MAX_CONCURRENT_JOBS = 5;
+let activeJobs = 0;
+
+const JOB_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes max per job
+
+async function _runJob(job) {
+  if (job.type === "bulk_send") {
+    // payload: { sportKey, templateKey, dryRun, limit }
+    const results = await runBulkSend(job.payload);
+    logger.info(`[Worker] Job ${job.id} completed. Sent: ${results?.sent}, Failed: ${results?.failed}`);
+  } else {
+    throw new Error(`Unknown job type: ${job.type}`);
+  }
+}
+
 async function processJob(job) {
+  logger.info(`[Worker] Started job ${job.id} of type ${job.type}`);
+
+  const timeoutPromise = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error(`Job timed out after ${JOB_TIMEOUT_MS / 60000} minutes`)), JOB_TIMEOUT_MS)
+  );
+
   try {
-    logger.info(`[Worker] Started job ${job.id} of type ${job.type}`);
-    
-    if (job.type === "bulk_send") {
-      // payload: { sportKey, templateKey, dryRun, limit }
-      const results = await runBulkSend(job.payload);
-      
-      // Update as completed
-      await supabase.from("jobs")
-        .update({ status: "completed", updated_at: new Date() })
-        .eq("id", job.id);
-        
-      logger.info(`[Worker] Job ${job.id} completed. Sent: ${results?.sent}, Failed: ${results?.failed}`);
-    } else {
-      throw new Error(`Unknown job type: ${job.type}`);
-    }
+    await Promise.race([_runJob(job), timeoutPromise]);
+
+    await supabase.from("jobs")
+      .update({ status: "completed", updated_at: new Date() })
+      .eq("id", job.id);
+
   } catch (err) {
     logger.error(`[Worker] Job ${job.id} failed:`, err.message);
-    
-    // Update as failed
+
     await supabase.from("jobs")
-      .update({ 
-        status: "failed", 
-        error_message: err.message, 
-        updated_at: new Date() 
+      .update({
+        status: "failed",
+        error_message: err.message,
+        updated_at: new Date()
       })
       .eq("id", job.id);
   }
@@ -39,6 +50,11 @@ async function processJob(job) {
 
 async function workerLoop() {
   if (!isRunning) return;
+
+  if (activeJobs >= MAX_CONCURRENT_JOBS) {
+    timeoutId = setTimeout(workerLoop, interval);
+    return;
+  }
 
   try {
     // Attempt to atomically claim the next pending or stuck job
@@ -56,7 +72,16 @@ async function workerLoop() {
     if (job && job.id) {
       // We found work! Speed up the polling cycle
       interval = 1000;
-      await processJob(job);
+      activeJobs++;
+      
+      // Fire and forget (let it run concurrently)
+      processJob(job).finally(() => {
+        activeJobs--;
+      });
+      
+      // Immediately loop to grab another job up to the limit
+      workerLoop();
+      return;
     } else {
       // Idle, strictly back off up to 15 seconds
       interval = Math.min(interval + 1000, 15000);

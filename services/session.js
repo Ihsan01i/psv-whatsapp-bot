@@ -74,7 +74,23 @@ function resetSession(phone, waName) {
 
 // ── Internal ──────────────────────────────────────────────────
 
+const MAX_SESSIONS = 50000;
+
 function _createSession(phone) {
+  const keys = Object.keys(store);
+  if (keys.length >= MAX_SESSIONS) {
+    let oldestPhone = keys[0];
+    let oldestTime = store[oldestPhone].updatedAt;
+    for (const k of keys) {
+      if (store[k].updatedAt < oldestTime) {
+        oldestTime = store[k].updatedAt;
+        oldestPhone = k;
+      }
+    }
+    delete store[oldestPhone];
+    logger.warn(`[Session] Store full — evicted oldest session: ${oldestPhone}`);
+  }
+
   store[phone] = {
     step: "new",
     waName: "",
