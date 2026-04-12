@@ -296,6 +296,7 @@
       </div>
       <div class="user-row" id="user-info">
         <span id="user-email" style="font-size:12px;font-family:var(--font-mono);color:var(--muted);"></span>
+        <button id="refresh-btn" class="refresh-btn" onclick="loadAll()" title="Refresh">↻</button>
         <button class="refresh-btn" onclick="logout()">Logout</button>
       </div>
     </header>
@@ -427,10 +428,14 @@
     }
 
     async function logout() {
-      await fetchAuth(`${BASE_URL}/api/admin/logout`, { method: "POST" });
+      try {
+        await fetchAuth(`${BASE_URL}/api/admin/logout`, { method: "POST" });
+      } catch (_) {
+        // Server call failed — still log out locally. The cookie will expire on its own.
+      }
       document.getElementById("login-overlay").style.display = "flex";
       document.getElementById("main-app").style.display = "none";
-      if (typeof google !== 'undefined') google.accounts.id.disableAutoSelect();
+      if (typeof google !== "undefined") google.accounts.id.disableAutoSelect();
       toast("Logged out successfully", "info");
     }
 
@@ -603,9 +608,9 @@
     // ── Load everything ───────────────────────────────────────────
     async function loadAll() {
       const btn = document.getElementById("refresh-btn");
-      btn.classList.add("spinning");
+      btn?.classList.add("spinning");
       await loadCounts();
-      btn.classList.remove("spinning");
+      btn?.classList.remove("spinning");
     }
 
     // Init via /api/admin/session
