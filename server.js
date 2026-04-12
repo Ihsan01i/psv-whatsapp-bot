@@ -26,7 +26,7 @@ const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 const { handleIncomingMessage }    = require("./bot");
 const { sendTextMessage }          = require("./whatsapp");
 const { processLead, fetchLeads }  = require("./services/lead");
-const { runBulkSend }              = require("./bulkSender");
+const { startWorker }              = require("./services/worker");
 const { normalisePhone }           = require("./services/lead");
 const logger                       = require("./utils/logger");
 
@@ -259,32 +259,65 @@ app.get("/api/admin/leads", requireAuth, async (req, res) => {
 });
 
 // ────────────────────────────────────────────────────────────
-// 5. ADMIN: TRIGGER BULK SEND  (protected)
+// 5. ADMIN: TRIGGER BULK SEND (Queue Job)
 // ────────────────────────────────────────────────────────────
 app.post("/api/admin/bulk-send", requireAuth, async (req, res) => {
-  // Respond immediately — bulk send may take minutes
-  res.json({ success: true, message: "Bulk send started. Check server logs." });
-
-  const { sportKey, templateKey, dryRun, limit } = req.body;
-  const userEmail = req.user?.email || "Unknown admin";
-  
-  const supabase = require("./services/db");
-  supabase.from("admin_logs").insert({
-    admin_email: userEmail,
-    action: "BULK_SEND_TRIGGER",
-    details: JSON.stringify({ sportKey, templateKey, dryRun, limit, ip: req.ip })
-  }).then();
-
   try {
-    const results = await runBulkSend({
+    const { sportKey, templateKey, dryRun, limit } = req.body;
+    const userEmail = req.user?.email || "Unknown admin";
+    
+    const supabase = require("./services/db");
+    
+    // Audit Logging
+    supabase.from("admin_logs").insert({
+      admin_email: userEmail,
+      action: "BULK_SEND_TRIGGER",
+      details: JSON.stringify({ sportKey, templateKey, dryRun, limit, ip: req.ip })
+    }).then();
+
+    // Create Async Job
+    const payload = {
       sportKey:    sportKey    || null,
       templateKey: templateKey || "general_followup",
       dryRun:      dryRun      ?? false,
       limit:       limit       || 100,
-    });
-    logger.info("[API] Bulk send completed:", results);
+    };
+
+    const { data: job, error } = await supabase
+      .from("jobs")
+      .insert({
+        type: "bulk_send",
+        payload,
+        status: "pending"
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.json({ success: true, message: "Job created successfully", job });
   } catch (err) {
-    logger.error("[API] /api/bulk-send error:", err.message);
+    logger.error("[API] /api/admin/bulk-send error:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ────────────────────────────────────────────────────────────
+// 5B. ADMIN: GET JOBS STATUS (protected)
+// ────────────────────────────────────────────────────────────
+app.get("/api/admin/jobs", requireAuth, async (req, res) => {
+  try {
+    const supabase = require("./services/db");
+    const { data, error } = await supabase
+      .from("jobs")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(50);
+
+    if (error) throw error;
+    res.json({ success: true, jobs: data });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -408,9 +441,12 @@ app.get("/api/admin/export-count", requireAuth, async (req, res) => {
 });
 
 // ────────────────────────────────────────────────────────────
-// 9. START SERVER
+// 9. START SERVER & WORKER
 // ────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, async () => {
   logger.info(`🚀 PSV Sports Academy Bot running on port ${PORT}`);
+  
+  // Start the background job queue
+  startWorker();
 });
