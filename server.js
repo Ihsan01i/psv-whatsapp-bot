@@ -31,13 +31,6 @@ const { normalisePhone } = require("./services/lead");
 const supabase = require("./services/db");
 const logger = require("./utils/logger");
 
-app.use((req, res, next) => {
-  if (req.headers["x-forwarded-proto"] !== "https") {
-    return res.redirect(`https://${req.headers.host}${req.url}`);
-  }
-  next();
-});
-
 if (!process.env.VERIFY_TOKEN) {
   throw new Error("FATAL: VERIFY_TOKEN environment variable is missing.");
 }
@@ -69,6 +62,20 @@ app.use(bodyParser.json({
     }
   }
 }));
+
+const express = require("express");
+
+const app = express();   // ✅ FIRST create app
+
+app.set("trust proxy", 1);  // ✅ THEN config
+
+// ✅ THEN middleware
+app.use((req, res, next) => {
+  if (req.headers["x-forwarded-proto"] !== "https") {
+    return res.redirect(`https://${req.headers.host}${req.url}`);
+  }
+  next();
+});
 
 const crypto = require("crypto");
 
