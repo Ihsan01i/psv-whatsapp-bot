@@ -334,7 +334,11 @@
     // ── State ─────────────────────────────────────────────────────
     let counts = {};
     const exportLog = [];
-    let jwtToken = localStorage.getItem("admin_token");
+
+    // All fetch requests must include cookies for auth
+    const fetchAuth = (url, options = {}) => {
+      return fetch(url, { ...options, credentials: "include" });
+    };
 
     // ── Helpers ───────────────────────────────────────────────────
     function toast(msg, type = "info") {
@@ -350,14 +354,10 @@
       }, 3500);
     }
 
-    const authHeaders = () => ({
-      "Authorization": `Bearer ${jwtToken}`
-    });
-
     // ── Auth Handling ──────────────────────────────────────────────
     async function handleGoogleLogin(response) {
       try {
-        const res = await fetch(`${BASE_URL}/api/admin/google-login`, {
+        const res = await fetchAuth(`${BASE_URL}/api/admin/google-login`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ credential: response.credential })
@@ -365,9 +365,6 @@
 
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Login failed");
-
-        jwtToken = data.token;
-        localStorage.setItem("admin_token", jwtToken);
 
         document.getElementById("user-email").textContent = data.email;
         document.getElementById("login-overlay").style.display = "none";
@@ -380,12 +377,12 @@
       }
     }
 
-    function logout() {
-      localStorage.removeItem("admin_token");
-      jwtToken = null;
+    async function logout() {
+      await fetchAuth(`${BASE_URL}/api/admin/logout`, { method: "POST" });
       document.getElementById("login-overlay").style.display = "flex";
       document.getElementById("main-app").style.display = "none";
       toast("Logged out", "info");
+      if (typeof google !== 'undefined') google.accounts.id.prompt();
     }
 
     function handleUnauthorized(res) {
@@ -397,12 +394,8 @@
 
     // ── Load counts from backend ──────────────────────────────────
     async function loadCounts() {
-      if (!jwtToken) return;
-
       try {
-        const res = await fetch(`${BASE_URL}/api/admin/export-count?sport=all`, {
-          headers: authHeaders(),
-        });
+        const res = await fetchAuth(`${BASE_URL}/api/admin/export-count?sport=all`);
         handleUnauthorized(res);
         if (!res.ok) throw new Error("Could not load counts");
 
@@ -461,15 +454,13 @@
 
     // ── Export (download + mark uploaded) ────────────────────────
     async function exportLeads(sportKey, btn) {
-      if (!jwtToken) return logout();
-
       const originalText = btn.innerHTML;
       btn.classList.add("loading");
       btn.innerHTML = "⏳ Downloading…";
 
       try {
         const url = `${BASE_URL}/api/admin/export-leads?sport=${encodeURIComponent(sportKey)}`;
-        const res = await fetch(url, { headers: authHeaders() });
+        const res = await fetchAuth(url);
 
         handleUnauthorized(res);
 
@@ -568,24 +559,28 @@
       btn.classList.remove("spinning");
     }
 
-    // Init
-    if (jwtToken) {
-      document.getElementById("login-overlay").style.display = "none";
-      document.getElementById("main-app").style.display = "block";
-      // We can decode JWT to get email, or just say 'Admin' until they do an action.
-      // For simplicity, we decode locally without validation just for UI, 
-      // since server handles real validation.
+    // Init via /api/admin/session
+    async function init() {
       try {
-        const payload = JSON.parse(atob(jwtToken.split('.')[1]));
-        document.getElementById("user-email").textContent = payload.email || "Admin";
-      } catch (e) {
-        document.getElementById("user-email").textContent = "Admin";
+        const res = await fetchAuth(`${BASE_URL}/api/admin/session`);
+        if (res.ok) {
+          const data = await res.json();
+          document.getElementById("user-email").textContent = data.email || "Admin";
+          document.getElementById("login-overlay").style.display = "none";
+          document.getElementById("main-app").style.display = "block";
+          loadAll();
+        } else {
+          throw new Error("No session");
+        }
+      } catch (err) {
+        document.getElementById("login-overlay").style.display = "flex";
+        document.getElementById("main-app").style.display = "none";
+        renderCards({});
+        renderSummary(0);
       }
-      loadAll();
-    } else {
-      renderCards({});
-      renderSummary(0);
     }
+    
+    init();
   </script>
 </body>
 

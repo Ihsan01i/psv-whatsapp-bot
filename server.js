@@ -15,8 +15,9 @@ require("dotenv").config();
 const express    = require("express");
 const bodyParser = require("body-parser");
 const cors       = require("cors");
-const rateLimit  = require("express-rate-limit");
-const jwt        = require("jsonwebtoken");
+const rateLimit    = require("express-rate-limit");
+const jwt          = require("jsonwebtoken");
+const cookieParser = require("cookie-parser");
 const { OAuth2Client } = require("google-auth-library");
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
@@ -30,7 +31,17 @@ const logger                       = require("./utils/logger");
 
 const app = express();
 app.use(bodyParser.json());
-app.use(cors());
+app.use(cookieParser());
+app.use(cors({
+  origin: [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    process.env.FRONTEND_URL,
+    "https://psv-whatsapp-bot-production.up.railway.app",
+    "https://psvsports.com"
+  ].filter(Boolean),
+  credentials: true
+}));
 
 const path = require("path");
 app.use(express.static(path.join(__dirname, "public")));
@@ -42,25 +53,30 @@ const apiLimiter = rateLimit({
   message: { success: false, message: "Too many requests, please try again later." }
 });
 
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, 
+  max: 20, 
+  message: { success: false, error: "Too many login attempts, please try again later." }
+});
+
 // ── JWT Auth Middleware ─────────────────────────────────────────
 function requireAuth(req, res, next) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) {
-    return res.status(401).json({ error: "No token provided" });
+  const token = req.cookies.admin_token;
+  if (!token) {
+    return res.status(401).json({ error: "No session token provided" });
   }
 
-  const token = authHeader.split(" ")[1];
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.user = decoded; // Contains { email }
     next();
   } catch (err) {
-    return res.status(403).json({ error: "Invalid token" });
+    return res.status(403).json({ error: "Invalid or expired session" });
   }
 }
 
 // ── Google Login Endpoint ───────────────────────────────────────
-app.post("/api/admin/google-login", async (req, res) => {
+app.post("/api/admin/google-login", authLimiter, async (req, res) => {
   const { credential } = req.body;
   
   if (!credential) {
@@ -86,14 +102,39 @@ app.post("/api/admin/google-login", async (req, res) => {
       return res.status(403).json({ error: "Email not authorized" });
     }
 
-    // Email matches, issue our own session token valid for 24h
-    const token = jwt.sign({ email: userEmail }, process.env.JWT_SECRET, { expiresIn: "24h" });
+    // Email matches, issue our own session token valid for 6h
+    const token = jwt.sign({ email: userEmail }, process.env.JWT_SECRET, { expiresIn: "6h" });
     
-    res.json({ success: true, token, email: userEmail });
+    res.cookie("admin_token", token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production" || !!process.env.RAILWAY_ENVIRONMENT,
+      sameSite: "strict",
+      maxAge: 6 * 60 * 60 * 1000 // 6 hours
+    });
+
+    res.json({ success: true, email: userEmail });
+
+    // DB Audit Log
+    const supabase = require("./services/db");
+    supabase.from("admin_logs").insert({
+      admin_email: userEmail,
+      action: "LOGIN",
+      details: "Google Auth successful"
+    }).then(({ error }) => { if (error) logger.error("Audit log failed:", error.message) });
   } catch (err) {
     logger.error("Google Auth verification failed:", err.message);
     res.status(500).json({ error: "Authentication failed" });
   }
+});
+
+// ── Session Validation & Logout ─────────────────────────────────
+app.get("/api/admin/session", requireAuth, (req, res) => {
+  res.json({ success: true, email: req.user.email });
+});
+
+app.post("/api/admin/logout", (req, res) => {
+  res.clearCookie("admin_token");
+  res.json({ success: true });
 });
 
 // ────────────────────────────────────────────────────────────
@@ -243,10 +284,17 @@ app.get("/health", (req, res) => {
 app.get("/api/admin/export-leads", requireAuth, async (req, res) => {
   try {
     const userEmail = req.user?.email || "Unknown admin";
-    logger.info(`[ADMIN ACTION] ${userEmail} exported leads for sport: ${req.query.sport || 'all'}`);
+    const sport = req.query.sport || 'all';
+    logger.info(`[ADMIN ACTION] ${userEmail} exported leads for sport: ${sport}`);
     
     const supabase = require("./services/db");
-    const { sport } = req.query;
+    
+    // DB Audit Log
+    supabase.from("admin_logs").insert({
+      admin_email: userEmail,
+      action: "EXPORT_LEADS",
+      details: `Exported sport: ${sport}`
+    }).then(({ error }) => { if (error) logger.error("Audit log failed:", error.message) });
 
     let query = supabase
       .from("leads")
