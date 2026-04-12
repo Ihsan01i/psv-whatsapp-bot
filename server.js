@@ -131,6 +131,18 @@ function requireAuth(req, res, next) {
   }
 }
 
+// ── Supabase audit log helper ──────────────────────────────────
+// Supabase v2 query builders are thenable but NOT full Promises.
+// Chaining .catch() directly throws TypeError. Use this wrapper instead.
+async function safeLog(queryPromise) {
+  try {
+    const { error } = await queryPromise;
+    if (error) logger.error("Audit log failed:", error.message);
+  } catch (err) {
+    logger.error("Audit log failed:", err.message);
+  }
+}
+
 // ── Google Login Endpoint ───────────────────────────────────────
 app.post("/api/admin/google-login", authLimiter, async (req, res) => {
   const { credential } = req.body;
@@ -160,11 +172,11 @@ app.post("/api/admin/google-login", authLimiter, async (req, res) => {
 
     if (!userEmail || !allowedEmails.includes(userEmail.toLowerCase())) {
       logger.warn(`Google login attempt with unauthorized email: ${userEmail}`);
-      await supabase.from("admin_logs").insert({
+      await safeLog(supabase.from("admin_logs").insert({
         admin_email: userEmail || "unknown",
         action: "FAILED_LOGIN",
         details: JSON.stringify({ ip: req.ip, userAgent: req.headers["user-agent"], forwarded: req.headers["x-forwarded-for"] })
-      }).catch(err => logger.error("Audit log failed:", err.message));
+      }));
       return res.status(403).json({ error: "Email not authorized" });
     }
 
@@ -182,17 +194,17 @@ app.post("/api/admin/google-login", authLimiter, async (req, res) => {
       maxAge: SESSION_DURATION_MS // 6 hours
     });
 
-    res.json({ success: true, email: userEmail });
-
-    // DB Audit Log
-    await supabase.from("admin_logs").insert({
+    // DB Audit Log — must complete before res.json so errors don't double-send
+    await safeLog(supabase.from("admin_logs").insert({
       admin_email: userEmail,
       action: "LOGIN",
       details: "Google Auth successful"
-    }).catch(err => logger.error("Audit log failed:", err.message));
+    }));
+
+    res.json({ success: true, email: userEmail });
   } catch (err) {
     logger.error("Google Auth verification failed:", err.message);
-    res.status(500).json({ error: "Authentication failed" });
+    if (!res.headersSent) res.status(500).json({ error: "Authentication failed" });
   }
 });
 
@@ -338,11 +350,11 @@ app.post("/api/admin/bulk-send", requireAuth, async (req, res) => {
 
     const userEmail = req.user?.email || "Unknown admin";
     // Audit Logging
-    await supabase.from("admin_logs").insert({
+    await safeLog(supabase.from("admin_logs").insert({
       admin_email: userEmail,
       action: "BULK_SEND_TRIGGER",
       details: JSON.stringify({ sportKey, templateKey: safeTemplateKey, dryRun, limit: safeLimit, ip: req.ip })
-    }).catch(err => logger.error("Audit log failed:", err.message));
+    }));
 
     // Create Async Job
     const payload = {
@@ -421,11 +433,11 @@ app.get("/api/admin/export-leads", requireAuth, async (req, res) => {
     logger.info(`[ADMIN ACTION] ${userEmail} exported leads for sport: ${sport}`);
     
     // DB Audit Log
-    await supabase.from("admin_logs").insert({
+    await safeLog(supabase.from("admin_logs").insert({
       admin_email: userEmail,
       action: "EXPORT_LEADS",
       details: `Exported sport: ${sport}`
-    }).catch(err => logger.error("Audit log failed:", err.message));
+    }));
 
     // Stream Setup
     const baseQuery = () => {
@@ -488,14 +500,13 @@ app.get("/api/admin/export-leads", requireAuth, async (req, res) => {
       const CHUNK_SIZE = 500;
       for (let i = 0; i < exportedIds.length; i += CHUNK_SIZE) {
         const chunk = exportedIds.slice(i, i + CHUNK_SIZE);
-        await supabase
+        await safeLog(supabase
           .from("leads")
           .update({
             crm_uploaded: true,
             crm_uploaded_at: new Date().toISOString()
           })
-          .in("id", chunk)
-          .catch(err => logger.error("[Export] Failed to update chunk:", err.message));
+          .in("id", chunk));
       }
     }
 
