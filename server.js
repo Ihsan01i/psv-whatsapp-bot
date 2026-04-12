@@ -16,6 +16,10 @@ const express    = require("express");
 const bodyParser = require("body-parser");
 const cors       = require("cors");
 const rateLimit  = require("express-rate-limit");
+const jwt        = require("jsonwebtoken");
+const { OAuth2Client } = require("google-auth-library");
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+
 
 const { handleIncomingMessage }    = require("./bot");
 const { sendTextMessage }          = require("./whatsapp");
@@ -38,12 +42,59 @@ const apiLimiter = rateLimit({
   message: { success: false, message: "Too many requests, please try again later." }
 });
 
-// ── Optional: simple API key guard for admin routes ───────────
-function requireAdminKey(req, res, next) {
-  const key = req.headers["x-admin-key"] || req.query.adminKey;
-  if (key && key === process.env.ADMIN_API_KEY) return next();
-  return res.status(401).json({ error: "Unauthorised" });
+// ── JWT Auth Middleware ─────────────────────────────────────────
+function requireAuth(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    return res.status(401).json({ error: "No token provided" });
+  }
+
+  const token = authHeader.split(" ")[1];
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded; // Contains { email }
+    next();
+  } catch (err) {
+    return res.status(403).json({ error: "Invalid token" });
+  }
 }
+
+// ── Google Login Endpoint ───────────────────────────────────────
+app.post("/api/admin/google-login", async (req, res) => {
+  const { credential } = req.body;
+  
+  if (!credential) {
+    return res.status(400).json({ error: "Google credential missing" });
+  }
+
+  try {
+    const ticket = await googleClient.verifyIdToken({
+      idToken: credential,
+      audience: process.env.GOOGLE_CLIENT_ID
+    });
+    
+    const payload = ticket.getPayload();
+    const userEmail = payload.email;
+
+    // Parse comma-separated emails from .env (e.g. "admin1@psv.com, admin2@psv.com")
+    const allowedEmails = (process.env.ADMIN_EMAIL || "")
+      .split(",")
+      .map(e => e.trim().toLowerCase());
+
+    if (!userEmail || !allowedEmails.includes(userEmail.toLowerCase())) {
+      logger.warn(`Google login attempt with unauthorized email: ${userEmail}`);
+      return res.status(403).json({ error: "Email not authorized" });
+    }
+
+    // Email matches, issue our own session token valid for 24h
+    const token = jwt.sign({ email: userEmail }, process.env.JWT_SECRET, { expiresIn: "24h" });
+    
+    res.json({ success: true, token, email: userEmail });
+  } catch (err) {
+    logger.error("Google Auth verification failed:", err.message);
+    res.status(500).json({ error: "Authentication failed" });
+  }
+});
 
 // ────────────────────────────────────────────────────────────
 // 1. WEBHOOK VERIFICATION
@@ -123,10 +174,10 @@ app.post("/submit-lead", apiLimiter, async (req, res) => {
 // ────────────────────────────────────────────────────────────
 // 4. ADMIN: FETCH LEADS  (protected)
 //
-// GET /api/leads?sportKey=archery&since=2024-01-01&source=whatsapp
-// Header: x-admin-key: <ADMIN_API_KEY>
+// GET /api/admin/leads?sportKey=archery&since=2024-01-01&source=whatsapp
+// Header: Authorization: Bearer <token>
 // ────────────────────────────────────────────────────────────
-app.get("/api/leads", requireAdminKey, async (req, res) => {
+app.get("/api/admin/leads", requireAuth, async (req, res) => {
   try {
     const { sportKey, since, source, limit } = req.query;
     const leads = await fetchLeads({
@@ -145,13 +196,13 @@ app.get("/api/leads", requireAdminKey, async (req, res) => {
 // ────────────────────────────────────────────────────────────
 // 5. ADMIN: TRIGGER BULK SEND  (protected)
 //
-// POST /api/bulk-send
+// POST /api/admin/bulk-send
 // Body: { sportKey, templateKey, dryRun, limit }
-// Header: x-admin-key: <ADMIN_API_KEY>
+// Header: Authorization: Bearer <token>
 //
 // ⚠️  Only call this for users who opted in via WhatsApp.
 // ────────────────────────────────────────────────────────────
-app.post("/api/bulk-send", requireAdminKey, async (req, res) => {
+app.post("/api/admin/bulk-send", requireAuth, async (req, res) => {
   // Respond immediately — bulk send may take minutes
   res.json({ success: true, message: "Bulk send started. Check server logs." });
 
@@ -189,8 +240,11 @@ app.get("/health", (req, res) => {
 // 7. Export Leads
 // ────────────────────────────────────────────────────────────
 
-app.get("/api/export-leads", requireAdminKey, async (req, res) => {
+app.get("/api/admin/export-leads", requireAuth, async (req, res) => {
   try {
+    const userEmail = req.user?.email || "Unknown admin";
+    logger.info(`[ADMIN ACTION] ${userEmail} exported leads for sport: ${req.query.sport || 'all'}`);
+    
     const supabase = require("./services/db");
     const { sport } = req.query;
 
@@ -252,8 +306,7 @@ app.get("/api/export-leads", requireAdminKey, async (req, res) => {
 // ────────────────────────────────────────────────────────────
 // 8. Export Count
 
-// ────────────────────────────────────────────────────────────
-app.get("/api/export-count", requireAdminKey, async (req, res) => {
+app.get("/api/admin/export-count", requireAuth, async (req, res) => {
   try {
     const supabase = require("./services/db");
 
