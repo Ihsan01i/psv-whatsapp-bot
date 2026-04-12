@@ -449,11 +449,6 @@
       padding: 40px;
       backdrop-filter: blur(20px);
       -webkit-backdrop-filter: blur(20px);
-      overflow: visible;
-    }
-
-    #log-container {
-      overflow: visible;
     }
 
     /* Desktop table */
@@ -461,7 +456,6 @@
       width: 100%;
       border-collapse: collapse;
       font-family: var(--font-mono);
-      table-layout: fixed;
     }
 
     .log-table th {
@@ -479,8 +473,6 @@
       border-bottom: 1px solid rgba(255, 255, 255, 0.03);
       color: #e2e8f0;
       font-size: 13px;
-      vertical-align: top;
-      word-break: break-word;
     }
 
     .log-table tr:last-child td {
@@ -534,29 +526,6 @@
       font-size: 11px;
       word-break: break-all;
       margin-top: 6px;
-    }
-
-    .log-action-btn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 6px;
-      background: rgba(255, 255, 255, 0.05);
-      color: var(--text);
-      border: 1px solid var(--border-glass);
-      border-radius: 10px;
-      padding: 8px 12px;
-      font-family: var(--font-mono);
-      font-size: 11px;
-      cursor: pointer;
-      transition: all 0.2s ease;
-      white-space: nowrap;
-    }
-
-    .log-action-btn:hover {
-      background: rgba(255, 176, 32, 0.12);
-      border-color: rgba(255, 176, 32, 0.35);
-      color: var(--accent);
     }
 
     .badge {
@@ -1186,38 +1155,15 @@
         .join(", ");
     }
 
-    function selectedSportsLabel(entry) {
-      const breakdownLabel = formatSportBreakdown(entry.breakdown);
-      if (breakdownLabel) return breakdownLabel;
-      if (entry.sport && entry.sport !== "all") return sportLabel(entry.sport);
-      return "-";
-    }
-
-    function downloadRecentExport(sportKey) {
-      const tempButton = {
-        innerHTML: "Download",
-        classList: {
-          add() { },
-          remove() { }
-        }
-      };
-      exportLeads(sportKey, tempButton);
-    }
-
     function normalizeExportEntry(entry) {
       const createdAt = entry.createdAt ? new Date(entry.createdAt) : new Date();
-      const sport = entry.sport || "all";
-      const count = Number(entry.count || 0);
-      const breakdown = entry.breakdown && Object.keys(entry.breakdown).length > 0
-        ? entry.breakdown
-        : (sport !== "all" ? { [sport]: count } : {});
       return {
         date: createdAt.toLocaleDateString("en-IN"),
         time: createdAt.toLocaleTimeString("en-IN"),
-        sport,
-        count,
-        breakdown,
-        filename: entry.filename || "-",
+        sport: entry.sport || "all",
+        count: Number(entry.count || 0),
+        breakdown: entry.breakdown || {},
+        filename: entry.filename || "—",
         status: entry.status || "exported",
       };
     }
@@ -1296,7 +1242,7 @@
         setTimeout(() => loadRecentExports(), 400);
       } catch (err) {
         toast(`Export failed: ${err.message}`, "error");
-        exportLog.unshift({ time: timeStr, date: dateStr, sport: sportKey, count: 0, breakdown: {}, filename: "-", status: "error" });
+        exportLog.unshift({ time: timeStr, date: dateStr, sport: sportKey, count: 0, filename: "—", status: "error" });
         renderLog();
       } finally {
         btn.classList.remove("loading");
@@ -1313,28 +1259,29 @@
     function renderLog() {
       const container = document.getElementById("log-container");
       if (exportLog.length === 0) {
-        container.innerHTML = `<div class="empty"><div class="empty-icon">No exports yet this session</div></div>`;
+        container.innerHTML = `<div class="empty"><div class="empty-icon">📋</div>No exports yet this session</div>`;
         return;
       }
 
+      // Desktop table
       const tableWrap = document.createElement("div");
       tableWrap.innerHTML = `
           <table class="log-table">
-            <thead><tr><th>Date</th><th>Time</th><th>Sport</th><th>Leads</th><th>Selected Sports</th><th>File</th><th>Status</th><th>Download</th></tr></thead>
+            <thead><tr><th>Date</th><th>Time</th><th>Sport</th><th>Leads</th><th>Selected Sports</th><th>File</th><th>Status</th></tr></thead>
             <tbody>${exportLog.map(e => `
               <tr>
                 <td>${escapeHTML(e.date)}</td>
                 <td>${escapeHTML(e.time)}</td>
                 <td>${escapeHTML(sportLabel(e.sport))}</td>
                 <td>${e.count}</td>
-                <td style="font-size:11px;color:var(--muted);">${escapeHTML(selectedSportsLabel(e))}</td>
-                <td style="font-size:11px;color:var(--muted);">${escapeHTML(e.filename || "-")}</td>
+                <td style="font-size:11px;color:var(--muted);">${escapeHTML(formatSportBreakdown(e.breakdown) || "â€”")}</td>
+                <td style="font-size:11px;color:var(--muted);">${escapeHTML(e.filename)}</td>
                 <td>${statusBadge(e.status)}</td>
-                <td><button class="log-action-btn" onclick="downloadRecentExport('${e.sport}')">Download</button></td>
               </tr>`).join("")}
           </tbody>
         </table>`;
 
+      // Mobile cards
       const mobileWrap = document.createElement("div");
       mobileWrap.className = "log-cards";
       mobileWrap.innerHTML = exportLog.map(e => `
@@ -1356,11 +1303,8 @@
               <div class="log-card-val">${escapeHTML(e.date)} ${escapeHTML(e.time)}</div>
             </div>
           </div>
-          <div class="log-card-file">Selected: ${escapeHTML(selectedSportsLabel(e))}</div>
-          <div class="log-card-file">${escapeHTML(e.filename || "-")}</div>
-          <div style="margin-top:10px;">
-            <button class="log-action-btn" onclick="downloadRecentExport('${e.sport}')">Download</button>
-          </div>
+          <div class="log-card-file">Selected: ${escapeHTML(formatSportBreakdown(e.breakdown) || "â€”")}</div>
+          <div class="log-card-file">${escapeHTML(e.filename)}</div>
         </div>`).join("");
 
       container.innerHTML = "";
@@ -1398,4 +1342,3 @@
 </body>
 
 </html>
-
