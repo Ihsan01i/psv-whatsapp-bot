@@ -213,7 +213,7 @@ app.get("/api/admin/session", requireAuth, (req, res) => {
   res.json({ success: true, email: req.user.email });
 });
 
-app.post("/api/admin/logout", requireAuth, (req, res) => {
+app.post("/api/admin/logout", (req, res) => {
   res.clearCookie("admin_token", {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production" || !!process.env.RAILWAY_ENVIRONMENT,
