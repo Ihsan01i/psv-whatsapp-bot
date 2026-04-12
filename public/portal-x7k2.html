@@ -399,8 +399,8 @@
       await fetchAuth(`${BASE_URL}/api/admin/logout`, { method: "POST" });
       document.getElementById("login-overlay").style.display = "flex";
       document.getElementById("main-app").style.display = "none";
-      toast("Logged out", "info");
-      if (typeof google !== 'undefined') google.accounts.id.prompt();
+      if (typeof google !== 'undefined') google.accounts.id.disableAutoSelect();
+      toast("Logged out successfully", "info");
     }
 
     function handleUnauthorized(res) {
