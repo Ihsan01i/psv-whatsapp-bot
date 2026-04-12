@@ -163,6 +163,13 @@ function parseAuditDetails(details) {
   try {
     return JSON.parse(details);
   } catch (_) {
+    const legacyMatch = details.match(/Exported sport:\s*(.+)$/i);
+    if (legacyMatch) {
+      return {
+        sport: legacyMatch[1].trim().toLowerCase(),
+        note: details,
+      };
+    }
     return { note: details };
   }
 }
