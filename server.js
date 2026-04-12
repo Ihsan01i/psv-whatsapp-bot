@@ -40,6 +40,7 @@ const app = express();
 app.set("trust proxy", 1);
 
 app.use(helmet({
+  crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" }, // Required for Google Sign-In popup flow
   contentSecurityPolicy: {
     directives: {
       defaultSrc:  ["'self'"],
