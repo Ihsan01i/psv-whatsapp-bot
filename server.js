@@ -63,19 +63,6 @@ app.use(bodyParser.json({
   }
 }));
 
-const express = require("express");
-
-const app = express();
-
-app.set("trust proxy", 1);
-
-app.use((req, res, next) => {
-  if (req.headers["x-forwarded-proto"] !== "https") {
-    return res.redirect(`https://${req.headers.host}${req.url}`);
-  }
-  next();
-});
-
 const crypto = require("crypto");
 
 function verifyWebhookSignature(req, res, next) {
