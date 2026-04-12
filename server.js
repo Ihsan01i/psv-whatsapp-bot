@@ -65,11 +65,10 @@ app.use(bodyParser.json({
 
 const express = require("express");
 
-const app = express();   // ✅ FIRST create app
+const app = express();
 
-app.set("trust proxy", 1);  // ✅ THEN config
+app.set("trust proxy", 1);
 
-// ✅ THEN middleware
 app.use((req, res, next) => {
   if (req.headers["x-forwarded-proto"] !== "https") {
     return res.redirect(`https://${req.headers.host}${req.url}`);
