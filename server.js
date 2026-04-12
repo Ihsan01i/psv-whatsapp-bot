@@ -146,6 +146,27 @@ async function safeLog(queryPromise) {
   }
 }
 
+function formatExportFilename(sport) {
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const date = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
+  const time = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  const safeSport = String(sport || "all").replace(/[^\w-]/g, "_");
+  return `psv_leads_${safeSport}_${date}_${time}.csv`;
+}
+
+function parseAuditDetails(details) {
+  if (!details) return {};
+  if (typeof details === "object") return details;
+  if (typeof details !== "string") return {};
+
+  try {
+    return JSON.parse(details);
+  } catch (_) {
+    return { note: details };
+  }
+}
+
 // ── Google Login Endpoint ───────────────────────────────────────
 app.post("/api/admin/google-login", authLimiter, async (req, res) => {
   const { credential } = req.body;
@@ -433,20 +454,13 @@ app.get("/api/admin/export-leads", requireAuth, async (req, res) => {
   try {
     const userEmail = req.user?.email || "Unknown admin";
     const sport = req.query.sport || 'all';
-    logger.info(`[ADMIN ACTION] ${userEmail} exported leads for sport: ${sport}`);
-
-    // DB Audit Log
-    await safeLog(supabase.from("admin_logs").insert({
-      admin_email: userEmail,
-      action: "EXPORT_LEADS",
-      details: `Exported sport: ${sport}`
-    }));
+    logger.info(`[ADMIN ACTION] ${userEmail} started export for sport: ${sport}`);
 
     // Stream Setup
     const baseQuery = () => {
       let q = supabase
         .from("leads")
-        .select("id, name, phone, location", { count: "exact" })
+        .select("id, name, phone, location, sport_key", { count: "exact" })
         .eq("crm_uploaded", false)
         .order("id", { ascending: true }); // Ensure stable sorting for pagination
 
@@ -461,7 +475,8 @@ app.get("/api/admin/export-leads", requireAuth, async (req, res) => {
     if (countErr) throw countErr;
 
     res.setHeader("Content-Type", "text/csv");
-    res.setHeader("Content-Disposition", `attachment; filename=leads_${sport}.csv`);
+    const filename = formatExportFilename(sport);
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     res.setHeader("X-Lead-Count", count || 0);
 
     // Write header
@@ -483,6 +498,7 @@ app.get("/api/admin/export-leads", requireAuth, async (req, res) => {
 
     // Stream by pages
     const PAGE_SIZE = 1000;
+    const breakdown = {};
 
     for (let offset = 0; offset < count; offset += PAGE_SIZE) {
       const { data, error } = await baseQuery().range(offset, offset + PAGE_SIZE - 1);
@@ -495,6 +511,9 @@ app.get("/api/admin/export-leads", requireAuth, async (req, res) => {
       for (const l of data) {
         res.write(`${escapeCSV(l.name)},${escapeCSV(l.phone)},${escapeCSV(l.location)}\n`);
         exportedIds.push(l.id);
+        if (l.sport_key) {
+          breakdown[l.sport_key] = (breakdown[l.sport_key] || 0) + 1;
+        }
       }
     }
 
@@ -515,6 +534,18 @@ app.get("/api/admin/export-leads", requireAuth, async (req, res) => {
 
     // End stream
     res.end();
+
+    await safeLog(supabase.from("admin_logs").insert({
+      admin_email: userEmail,
+      action: "EXPORT_LEADS",
+      details: JSON.stringify({
+        sport,
+        leadCount: exportedIds.length,
+        breakdown,
+        filename,
+        status: exportedIds.length > 0 ? "exported" : "empty"
+      })
+    }));
 
   } catch (err) {
     logger.error("Export failed", err);
@@ -561,5 +592,37 @@ app.listen(PORT, async () => {
     startWorker();
   } else {
     logger.info(`[Worker] Stopped via WORKER_ENABLED=false`);
+  }
+});
+
+app.get("/api/admin/recent-exports", requireAuth, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("admin_logs")
+      .select("id, admin_email, created_at, details")
+      .eq("action", "EXPORT_LEADS")
+      .order("created_at", { ascending: false })
+      .limit(20);
+
+    if (error) throw error;
+
+    const exports = (data || []).map((row) => {
+      const details = parseAuditDetails(row.details);
+      return {
+        id: row.id,
+        adminEmail: row.admin_email,
+        createdAt: row.created_at,
+        sport: details.sport || "all",
+        count: Number(details.leadCount || 0),
+        breakdown: details.breakdown || {},
+        filename: details.filename || "",
+        status: details.status || "exported",
+      };
+    });
+
+    res.json({ success: true, exports });
+  } catch (err) {
+    logger.error("[API] /api/admin/recent-exports error:", err.message);
+    res.status(500).json({ success: false, error: err.message });
   }
 });

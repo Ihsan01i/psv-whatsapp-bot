@@ -1013,7 +1013,7 @@
     ];
 
     let counts = {};
-    const exportLog = [];
+    let exportLog = [];
 
     const fetchAuth = (url, options = {}) => fetch(url, { ...options, credentials: "include" });
 
@@ -1148,8 +1148,42 @@
       return s ? `${s.emoji} ${s.name}` : sportKey;
     }
 
+    function formatSportBreakdown(breakdown = {}) {
+      return Object.entries(breakdown)
+        .filter(([, count]) => Number(count) > 0)
+        .map(([key, count]) => `${sportLabel(key)} (${count})`)
+        .join(", ");
+    }
+
+    function normalizeExportEntry(entry) {
+      const createdAt = entry.createdAt ? new Date(entry.createdAt) : new Date();
+      return {
+        date: createdAt.toLocaleDateString("en-IN"),
+        time: createdAt.toLocaleTimeString("en-IN"),
+        sport: entry.sport || "all",
+        count: Number(entry.count || 0),
+        breakdown: entry.breakdown || {},
+        filename: entry.filename || "—",
+        status: entry.status || "exported",
+      };
+    }
+
+    async function loadRecentExports() {
+      try {
+        const res = await fetchAuth(`${BASE_URL}/api/admin/recent-exports`);
+        handleUnauthorized(res);
+        if (!res.ok) throw new Error("Could not load recent exports");
+        const data = await res.json();
+        exportLog = (data.exports || []).map(normalizeExportEntry);
+        renderLog();
+      } catch (err) {
+        toast(err.message, "error");
+      }
+    }
+
     async function exportLeads(sportKey, btn) {
       const originalText = btn.innerHTML;
+      const previousCounts = { ...counts };
       btn.classList.add("loading");
       btn.innerHTML = "⏳ Downloading…";
       const now = new Date();
@@ -1177,17 +1211,35 @@
 
         if (leadCount === 0) {
           toast(`No pending leads for ${sportLabel(sportKey)}`, "info");
-          // Still log it so Recent Exports shows the attempt
-          exportLog.unshift({ time: timeStr, date: dateStr, sport: sportKey, count: 0, filename, status: "empty" });
+          exportLog.unshift({
+            time: timeStr,
+            date: dateStr,
+            sport: sportKey,
+            count: 0,
+            breakdown: sportKey === "all" ? previousCounts : { [sportKey]: 0 },
+            filename,
+            status: "empty"
+          });
         } else {
           toast(`✓ ${leadCount} lead${leadCount !== 1 ? "s" : ""} downloaded & marked uploaded`, "success");
           if (sportKey === "all") { Object.keys(counts).forEach((k) => { counts[k] = 0; }); }
           else { counts[sportKey] = 0; }
-          exportLog.unshift({ time: timeStr, date: dateStr, sport: sportKey, count: leadCount, filename, status: "exported" });
+          exportLog.unshift({
+            time: timeStr,
+            date: dateStr,
+            sport: sportKey,
+            count: leadCount,
+            breakdown: sportKey === "all"
+              ? Object.fromEntries(Object.entries(previousCounts).filter(([, count]) => count > 0))
+              : { [sportKey]: leadCount },
+            filename,
+            status: "exported"
+          });
           renderCards(counts);
           renderSummary(Object.values(counts).reduce((a, b) => a + b, 0));
         }
         renderLog();
+        setTimeout(() => loadRecentExports(), 400);
       } catch (err) {
         toast(`Export failed: ${err.message}`, "error");
         exportLog.unshift({ time: timeStr, date: dateStr, sport: sportKey, count: 0, filename: "—", status: "error" });
@@ -1214,17 +1266,18 @@
       // Desktop table
       const tableWrap = document.createElement("div");
       tableWrap.innerHTML = `
-        <table class="log-table">
-          <thead><tr><th>Date</th><th>Time</th><th>Sport</th><th>Leads</th><th>File</th><th>Status</th></tr></thead>
-          <tbody>${exportLog.map(e => `
-            <tr>
-              <td>${escapeHTML(e.date)}</td>
-              <td>${escapeHTML(e.time)}</td>
-              <td>${escapeHTML(sportLabel(e.sport))}</td>
-              <td>${e.count}</td>
-              <td style="font-size:11px;color:var(--muted);">${escapeHTML(e.filename)}</td>
-              <td>${statusBadge(e.status)}</td>
-            </tr>`).join("")}
+          <table class="log-table">
+            <thead><tr><th>Date</th><th>Time</th><th>Sport</th><th>Leads</th><th>Selected Sports</th><th>File</th><th>Status</th></tr></thead>
+            <tbody>${exportLog.map(e => `
+              <tr>
+                <td>${escapeHTML(e.date)}</td>
+                <td>${escapeHTML(e.time)}</td>
+                <td>${escapeHTML(sportLabel(e.sport))}</td>
+                <td>${e.count}</td>
+                <td style="font-size:11px;color:var(--muted);">${escapeHTML(formatSportBreakdown(e.breakdown) || "â€”")}</td>
+                <td style="font-size:11px;color:var(--muted);">${escapeHTML(e.filename)}</td>
+                <td>${statusBadge(e.status)}</td>
+              </tr>`).join("")}
           </tbody>
         </table>`;
 
@@ -1250,6 +1303,7 @@
               <div class="log-card-val">${escapeHTML(e.date)} ${escapeHTML(e.time)}</div>
             </div>
           </div>
+          <div class="log-card-file">Selected: ${escapeHTML(formatSportBreakdown(e.breakdown) || "â€”")}</div>
           <div class="log-card-file">${escapeHTML(e.filename)}</div>
         </div>`).join("");
 
@@ -1261,7 +1315,7 @@
     async function loadAll() {
       const btn = document.getElementById("refresh-btn");
       btn?.classList.add("spinning");
-      await loadCounts();
+      await Promise.all([loadCounts(), loadRecentExports()]);
       btn?.classList.remove("spinning");
     }
 
