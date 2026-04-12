@@ -140,7 +140,6 @@ app.post("/api/admin/google-login", authLimiter, async (req, res) => {
     res.json({ success: true, email: userEmail });
 
     // DB Audit Log
-    const supabase = require("./services/db");
     supabase.from("admin_logs").insert({
       admin_email: userEmail,
       action: "LOGIN",
