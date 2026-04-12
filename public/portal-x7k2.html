@@ -1134,10 +1134,27 @@
       });
     }
 
+    function tsFilename(sportKey) {
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, "0");
+      const date = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
+      const time = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+      return `psv_leads_${sportKey}_${date}_${time}.csv`;
+    }
+
+    function sportLabel(sportKey) {
+      if (sportKey === "all") return "All Sports";
+      const s = SPORTS.find(s => s.key === sportKey);
+      return s ? `${s.emoji} ${s.name}` : sportKey;
+    }
+
     async function exportLeads(sportKey, btn) {
       const originalText = btn.innerHTML;
       btn.classList.add("loading");
       btn.innerHTML = "⏳ Downloading…";
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString("en-IN");
+      const dateStr = now.toLocaleDateString("en-IN");
       try {
         const url = `${BASE_URL}/api/admin/export-leads?sport=${encodeURIComponent(sportKey)}`;
         const res = await fetchAuth(url);
@@ -1150,30 +1167,41 @@
         const blob = await res.blob();
         const dlUrl = URL.createObjectURL(blob);
         const a = document.createElement("a");
-        const filename = res.headers.get("Content-Disposition")?.match(/filename="(.+)"/)?.[1]
-          || `psv_leads_${sportKey}.csv`;
+        // Always use a timestamped filename — prefer server header but fall back to generated one
+        const serverFilename = res.headers.get("Content-Disposition")?.match(/filename="(.+)"/)?.[1];
+        const filename = serverFilename || tsFilename(sportKey);
         a.href = dlUrl; a.download = filename;
         document.body.appendChild(a); a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(dlUrl);
 
         if (leadCount === 0) {
-          toast(`No pending leads for ${sportKey}`, "info");
+          toast(`No pending leads for ${sportLabel(sportKey)}`, "info");
+          // Still log it so Recent Exports shows the attempt
+          exportLog.unshift({ time: timeStr, date: dateStr, sport: sportKey, count: 0, filename, status: "empty" });
         } else {
           toast(`✓ ${leadCount} lead${leadCount !== 1 ? "s" : ""} downloaded & marked uploaded`, "success");
           if (sportKey === "all") { Object.keys(counts).forEach((k) => { counts[k] = 0; }); }
           else { counts[sportKey] = 0; }
-          exportLog.unshift({ time: new Date().toLocaleTimeString("en-IN"), sport: sportKey, count: leadCount, filename });
-          renderLog();
+          exportLog.unshift({ time: timeStr, date: dateStr, sport: sportKey, count: leadCount, filename, status: "exported" });
           renderCards(counts);
           renderSummary(Object.values(counts).reduce((a, b) => a + b, 0));
         }
+        renderLog();
       } catch (err) {
         toast(`Export failed: ${err.message}`, "error");
+        exportLog.unshift({ time: timeStr, date: dateStr, sport: sportKey, count: 0, filename: "—", status: "error" });
+        renderLog();
       } finally {
         btn.classList.remove("loading");
         btn.innerHTML = originalText;
       }
+    }
+
+    function statusBadge(status) {
+      if (status === "exported") return `<span class="badge uploaded">Exported</span>`;
+      if (status === "empty")    return `<span class="badge" style="background:rgba(148,163,184,.1);color:var(--muted);border:1px solid rgba(148,163,184,.2);">Empty</span>`;
+      return `<span class="badge" style="background:rgba(248,113,113,.1);color:#f87171;border:1px solid rgba(248,113,113,.2);">Error</span>`;
     }
 
     function renderLog() {
@@ -1187,14 +1215,15 @@
       const tableWrap = document.createElement("div");
       tableWrap.innerHTML = `
         <table class="log-table">
-          <thead><tr><th>Time</th><th>Sport</th><th>Leads</th><th>File</th><th>Status</th></tr></thead>
+          <thead><tr><th>Date</th><th>Time</th><th>Sport</th><th>Leads</th><th>File</th><th>Status</th></tr></thead>
           <tbody>${exportLog.map(e => `
             <tr>
-              <td>${e.time}</td>
-              <td>${escapeHTML(e.sport)}</td>
+              <td>${escapeHTML(e.date)}</td>
+              <td>${escapeHTML(e.time)}</td>
+              <td>${escapeHTML(sportLabel(e.sport))}</td>
               <td>${e.count}</td>
-              <td>${escapeHTML(e.filename)}</td>
-              <td><span class="badge uploaded">Uploaded</span></td>
+              <td style="font-size:11px;color:var(--muted);">${escapeHTML(e.filename)}</td>
+              <td>${statusBadge(e.status)}</td>
             </tr>`).join("")}
           </tbody>
         </table>`;
@@ -1207,9 +1236,9 @@
           <div class="log-card-row">
             <div>
               <div class="log-card-label">Sport</div>
-              <div class="log-card-val">${escapeHTML(e.sport)}</div>
+              <div class="log-card-val">${escapeHTML(sportLabel(e.sport))}</div>
             </div>
-            <span class="badge uploaded">Uploaded</span>
+            ${statusBadge(e.status)}
           </div>
           <div class="log-card-row">
             <div>
@@ -1217,8 +1246,8 @@
               <div class="log-card-val">${e.count}</div>
             </div>
             <div style="text-align:right">
-              <div class="log-card-label">Time</div>
-              <div class="log-card-val">${e.time}</div>
+              <div class="log-card-label">Date / Time</div>
+              <div class="log-card-val">${escapeHTML(e.date)} ${escapeHTML(e.time)}</div>
             </div>
           </div>
           <div class="log-card-file">${escapeHTML(e.filename)}</div>
