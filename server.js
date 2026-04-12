@@ -42,12 +42,13 @@ app.set("trust proxy", 1);
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
-      defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "https://accounts.google.com", "https://apis.google.com"],
-      connectSrc: ["'self'", "https://accounts.google.com"],
-      frameSrc: ["https://accounts.google.com"],
-      imgSrc: ["'self'", "data:"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
+      defaultSrc:  ["'self'"],
+      scriptSrc:   ["'self'", "https://accounts.google.com", "https://apis.google.com", "https://www.gstatic.com"],
+      connectSrc:  ["'self'", "https://accounts.google.com", "https://oauth2.googleapis.com"],
+      frameSrc:    ["https://accounts.google.com", "https://www.google.com"],
+      imgSrc:      ["'self'", "data:", "https://lh3.googleusercontent.com", "https://www.gstatic.com"],
+      styleSrc:    ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com", "https://accounts.google.com"],
+      fontSrc:     ["'self'", "https://fonts.gstatic.com"],
     },
   },
 }));
