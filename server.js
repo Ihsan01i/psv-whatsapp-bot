@@ -18,6 +18,7 @@ const cors       = require("cors");
 const rateLimit    = require("express-rate-limit");
 const jwt          = require("jsonwebtoken");
 const cookieParser = require("cookie-parser");
+const helmet       = require("helmet");
 const { OAuth2Client } = require("google-auth-library");
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
@@ -30,6 +31,22 @@ const { normalisePhone }           = require("./services/lead");
 const logger                       = require("./utils/logger");
 
 const app = express();
+
+app.set("trust proxy", 1);
+
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "https://accounts.google.com", "https://apis.google.com"],
+      connectSrc: ["'self'", "https://accounts.google.com"],
+      frameSrc: ["https://accounts.google.com"],
+      imgSrc: ["'self'", "data:"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+    },
+  },
+}));
+
 app.use(bodyParser.json());
 app.use(cookieParser());
 app.use(cors({
@@ -97,8 +114,15 @@ app.post("/api/admin/google-login", authLimiter, async (req, res) => {
       .split(",")
       .map(e => e.trim().toLowerCase());
 
+    const supabase = require("./services/db");
+
     if (!userEmail || !allowedEmails.includes(userEmail.toLowerCase())) {
       logger.warn(`Google login attempt with unauthorized email: ${userEmail}`);
+      supabase.from("admin_logs").insert({
+        admin_email: userEmail || "unknown",
+        action: "FAILED_LOGIN",
+        details: JSON.stringify({ ip: req.ip, userAgent: req.headers["user-agent"], forwarded: req.headers["x-forwarded-for"] })
+      }).then();
       return res.status(403).json({ error: "Email not authorized" });
     }
 
@@ -109,6 +133,7 @@ app.post("/api/admin/google-login", authLimiter, async (req, res) => {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production" || !!process.env.RAILWAY_ENVIRONMENT,
       sameSite: "strict",
+      path: "/",
       maxAge: 6 * 60 * 60 * 1000 // 6 hours
     });
 
@@ -236,18 +261,20 @@ app.get("/api/admin/leads", requireAuth, async (req, res) => {
 
 // ────────────────────────────────────────────────────────────
 // 5. ADMIN: TRIGGER BULK SEND  (protected)
-//
-// POST /api/admin/bulk-send
-// Body: { sportKey, templateKey, dryRun, limit }
-// Header: Authorization: Bearer <token>
-//
-// ⚠️  Only call this for users who opted in via WhatsApp.
 // ────────────────────────────────────────────────────────────
 app.post("/api/admin/bulk-send", requireAuth, async (req, res) => {
   // Respond immediately — bulk send may take minutes
   res.json({ success: true, message: "Bulk send started. Check server logs." });
 
   const { sportKey, templateKey, dryRun, limit } = req.body;
+  const userEmail = req.user?.email || "Unknown admin";
+  
+  const supabase = require("./services/db");
+  supabase.from("admin_logs").insert({
+    admin_email: userEmail,
+    action: "BULK_SEND_TRIGGER",
+    details: JSON.stringify({ sportKey, templateKey, dryRun, limit, ip: req.ip })
+  }).then();
 
   try {
     const results = await runBulkSend({
