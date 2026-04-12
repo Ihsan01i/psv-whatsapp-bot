@@ -9,6 +9,15 @@
   <link
     href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
     rel="stylesheet">
+  <!-- Define callback BEFORE GSI script loads so it's available at init time -->
+  <script>
+    function handleGoogleLogin(response) {
+      // Proxy to the main handler defined below; it will be ready by DOM load
+      if (typeof _handleGoogleLogin === 'function') {
+        _handleGoogleLogin(response);
+      }
+    }
+  </script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <style>
     /* ── Premium Modern Reset & Base ── */
@@ -364,7 +373,7 @@
     }
 
     // ── Auth Handling ──────────────────────────────────────────────
-    async function handleGoogleLogin(response) {
+    async function _handleGoogleLogin(response) {
       try {
         const res = await fetchAuth(`${BASE_URL}/api/admin/google-login`, {
           method: "POST",
