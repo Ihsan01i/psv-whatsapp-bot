@@ -95,7 +95,9 @@ app.use(cors({
     "http://127.0.0.1:3000",
     process.env.FRONTEND_URL,
     "https://psv-whatsapp-bot-production.up.railway.app",
-    "https://psvsports.com"
+    "https://prosportsventures.in",
+    "https://www.prosportsventures.in",
+    "https://api.prosportsventures.in",
   ].filter(Boolean),
   credentials: true
 }));
