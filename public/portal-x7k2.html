@@ -1024,11 +1024,11 @@
     const BASE_URL = window.location.hostname === "localhost" ? "http://localhost:3000" : "";
 
     const SPORTS = [
-      { key: "badminton_coaching", name: "Badminton Coaching", emoji: "🏸" },
-      { key: "badminton_court", name: "Court Booking", emoji: "🏟️" },
-      { key: "archery", name: "Archery", emoji: "🏹" },
-      { key: "basketball", name: "Basketball", emoji: "🏀" },
-      { key: "roller_skating", name: "Roller Skating", emoji: "🛼" },
+      { key: "Badminton - Coaching", aliases: ["badminton_coaching", "Badminton Coaching"], name: "Badminton Coaching", emoji: "🏸" },
+      { key: "Badminton - Court Booking", aliases: ["badminton_court", "Court Booking"], name: "Court Booking", emoji: "🏟️" },
+      { key: "Archery", aliases: ["archery"], name: "Archery", emoji: "🏹" },
+      { key: "Basketball", aliases: ["basketball"], name: "Basketball", emoji: "🏀" },
+      { key: "Roller Skating", aliases: ["roller_skating"], name: "Roller Skating", emoji: "🛼" },
     ];
 
     let counts = {};
@@ -1107,7 +1107,14 @@
         handleUnauthorized(res);
         if (!res.ok) throw new Error("Could not load counts");
         const data = await res.json();
-        counts = data.breakdown || {};
+        const rawBreakdown = data.breakdown || {};
+        counts = {};
+        Object.entries(rawBreakdown).forEach(([k, v]) => {
+          if (!k || k === "null" || k === "undefined") return;
+          const match = SPORTS.find(s => s.key === k || (s.aliases && s.aliases.includes(k)));
+          const finalKey = match ? match.key : k;
+          counts[finalKey] = (counts[finalKey] || 0) + v;
+        });
         renderSummary(data.total || 0);
         renderCards(counts);
       } catch (err) {
@@ -1127,16 +1134,7 @@
       const grid = document.getElementById("cards-grid");
       grid.innerHTML = "";
 
-      // Merge SPORTS list with any extra keys returned by server (e.g. new sports added later)
-      const knownKeys = new Set(SPORTS.map(s => s.key));
-      const allSports = [...SPORTS];
-      Object.keys(breakdown).forEach(key => {
-        if (!knownKeys.has(key) && breakdown[key] > 0) {
-          allSports.push({ key, name: key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()), emoji: "🏅" });
-        }
-      });
-
-      allSports.forEach((sport) => {
+      SPORTS.forEach((sport) => {
         const count = breakdown[sport.key] || 0;
         const card = document.createElement("div");
         card.className = "sport-card";
@@ -1203,7 +1201,15 @@
         handleUnauthorized(res);
         if (!res.ok) throw new Error("Could not load recent exports");
         const data = await res.json();
-        exportLog = (data.exports || []).map(normalizeExportEntry);
+        const oldLog = exportLog;
+        exportLog = (data.exports || []).map(entry => {
+          const norm = normalizeExportEntry(entry);
+          if (norm.status === "exported") {
+             const existing = oldLog.find(o => o.time === norm.time && o.sport === norm.sport && o.csvUrl);
+             if (existing) norm.csvUrl = existing.csvUrl;
+          }
+          return norm;
+        });
         renderLog();
       } catch (err) {
         toast(err.message, "error");
@@ -1297,7 +1303,7 @@
 
       // Desktop table
       const tableWrap = document.createElement("div");
-      tableWrap.style.overflowX = "auto";
+      // Removed overflowX="auto" to fix internal scrollbar request
       tableWrap.innerHTML = `
           <table class="log-table">
             <thead><tr><th>Date</th><th>Time</th><th>Sport</th><th>Leads</th><th>Selected Sports</th><th>File</th><th>Status</th><th></th></tr></thead>
