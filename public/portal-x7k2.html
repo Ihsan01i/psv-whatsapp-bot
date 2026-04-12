@@ -659,9 +659,8 @@
         border-radius: 20px;
         margin-bottom: 24px;
         flex-direction: column;
-        /* Stack logo and buttons on mobile */
         align-items: flex-start;
-        gap: 16px;
+        gap: 12px;
       }
 
       .logo {
@@ -684,7 +683,6 @@
         font-size: 11px;
       }
 
-      /* Kept visible for context */
       #user-email {
         display: none;
       }
@@ -692,7 +690,6 @@
       .user-row {
         width: 100%;
         justify-content: space-between;
-        /* Spread buttons out */
         gap: 8px;
       }
 
@@ -715,13 +712,12 @@
         margin-bottom: 16px;
       }
 
-      /* ── Summary: Vertical Stack Layout ── */
+      /* ── Summary ── */
       .export-all-row {
         padding: 20px;
         border-radius: 20px;
         margin-bottom: 24px;
         flex-direction: column;
-        /* Stop squishing, stack vertically */
         align-items: flex-start;
         gap: 16px;
       }
@@ -733,18 +729,14 @@
       .export-all-info h3 {
         font-size: 16px;
         margin-bottom: 4px;
-        white-space: normal;
       }
 
-      /* Removed nowrap */
       .export-all-info p {
         font-size: 12px;
-        white-space: normal;
       }
 
       #summary-actions {
         flex-direction: row;
-        /* Put count and button side-by-side */
         align-items: center;
         justify-content: space-between;
         width: 100%;
@@ -761,22 +753,20 @@
         font-size: 13px;
         border-radius: 12px;
         flex: 1;
-        /* Button takes remaining space */
       }
 
-      /* ── Cards: Relaxed Stacked Layout ── */
+      /* ── Cards ── */
       .cards-grid {
         grid-template-columns: 1fr;
-        gap: 16px;
+        gap: 12px;
         margin-bottom: 32px;
       }
 
       .sport-card {
-        padding: 20px;
-        border-radius: 20px;
-        gap: 16px;
+        padding: 16px;
+        border-radius: 18px;
+        gap: 12px;
         flex-direction: column;
-        /* Stack info on top, button on bottom */
         align-items: flex-start;
       }
 
@@ -785,20 +775,22 @@
         box-shadow: none;
       }
 
-      /* Disable hover lift on mobile */
-
-      /* Left: emoji + name */
       .card-left {
         display: flex;
         align-items: center;
-        gap: 14px;
+        gap: 12px;
         width: 100%;
       }
 
       .card-emoji {
-        font-size: 24px;
-        padding: 10px;
-        border-radius: 12px;
+        font-size: 20px;
+        padding: 8px;
+        border-radius: 10px;
+        width: 40px;
+        height: 40px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
       }
 
       .card-info {
@@ -807,15 +799,12 @@
 
       .card-name {
         font-size: 15px;
-        white-space: normal;
       }
 
-      /* Let long names wrap */
       .card-key {
-        font-size: 11px;
+        font-size: 10px;
       }
 
-      /* Right: count + button side-by-side */
       .card-right {
         display: flex;
         flex-direction: row;
@@ -827,23 +816,23 @@
 
       .card-count {
         margin: 0;
-        align-items: center;
+        align-items: baseline;
+        gap: 6px;
       }
 
       .count-num {
-        font-size: 32px;
+        font-size: 30px;
       }
 
       .count-label {
         display: block;
-        margin-left: 6px;
+        font-size: 11px;
       }
 
-      /* Bring back the label */
       .btn-download {
-        padding: 10px 16px;
+        padding: 10px 20px;
         font-size: 13px;
-        border-radius: 12px;
+        border-radius: 10px;
         margin-top: 0;
       }
 
@@ -871,7 +860,7 @@
       #toast-container {
         right: 12px;
         left: 12px;
-        max-width: auto;
+        max-width: 100%;
         bottom: 20px;
       }
 
@@ -886,16 +875,25 @@
 
     @media (max-width: 400px) {
       .logo-text h1 {
-        font-size: 14px;
+        font-size: 15px;
       }
 
       .export-all-row {
-        padding: 12px;
+        padding: 16px;
       }
 
       .sport-card {
-        padding: 12px;
+        padding: 14px;
       }
+    }
+
+    .export-all-row {
+      padding: 12px;
+    }
+
+    .sport-card {
+      padding: 12px;
+    }
     }
   </style>
 </head>
