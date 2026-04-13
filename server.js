@@ -575,13 +575,16 @@ app.get("/api/admin/export-leads", requireAuth, async (req, res) => {
     let csvStorageUrl = null;
     if (exportedIds.length > 0) {
       try {
-        const fileBuffer = Buffer.from(csvBuffer);
+        // Note: Node 18 native fetch rejects Node Buffers without explicit duplex config
+        // Using standard ArrayBuffer + duplex:'half' ensures it sends correctly via undici
+        const arrayBuffer = new TextEncoder().encode(csvBuffer).buffer;
 
         const { error: uploadErr } = await supabase.storage
           .from("exports")
-          .upload(filename, fileBuffer, {
+          .upload(filename, arrayBuffer, {
             contentType: "text/csv",
-            upsert: true
+            upsert: true,
+            duplex: "half"
           });
 
         if (uploadErr) {
