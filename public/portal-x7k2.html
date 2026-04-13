@@ -1192,6 +1192,7 @@
         breakdown: entry.breakdown || {},
         filename: entry.filename || "—",
         status: entry.status || "exported",
+        csvUrl: entry.csvStorageUrl || null,  // permanent Supabase Storage URL
       };
     }
 
@@ -1201,15 +1202,8 @@
         handleUnauthorized(res);
         if (!res.ok) throw new Error("Could not load recent exports");
         const data = await res.json();
-        const oldLog = exportLog;
-        exportLog = (data.exports || []).map(entry => {
-          const norm = normalizeExportEntry(entry);
-          if (norm.status === "exported") {
-             const existing = oldLog.find(o => o.time === norm.time && o.sport === norm.sport && o.csvUrl);
-             if (existing) norm.csvUrl = existing.csvUrl;
-          }
-          return norm;
-        });
+        // csvUrl is now a permanent Supabase Storage URL — no blob carry-over needed
+        exportLog = (data.exports || []).map(entry => normalizeExportEntry(entry));
         renderLog();
       } catch (err) {
         toast(err.message, "error");
@@ -1303,20 +1297,19 @@
 
       // Desktop table
       const tableWrap = document.createElement("div");
-      // Removed overflowX="auto" to fix internal scrollbar request
+      tableWrap.style.overflowX = "auto";  // scoped scroll — only table overflows, not the page
       tableWrap.innerHTML = `
           <table class="log-table">
-            <thead><tr><th>Date</th><th>Time</th><th>Sport</th><th>Leads</th><th>Selected Sports</th><th>File</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th>Date</th><th>Time</th><th>Sport</th><th>Leads</th><th>File</th><th>Status</th><th></th></tr></thead>
             <tbody>${exportLog.map((e, i) => `
               <tr>
                 <td>${escapeHTML(e.date)}</td>
                 <td>${escapeHTML(e.time)}</td>
                 <td>${escapeHTML(sportLabel(e.sport))}</td>
                 <td>${e.count}</td>
-                <td style="font-size:11px;color:var(--muted);">${escapeHTML(formatSportBreakdown(e.breakdown) || "\xe2\x80\x94")}</td>
                 <td style="font-size:11px;color:var(--muted);">${escapeHTML(e.filename)}</td>
                 <td>${statusBadge(e.status)}</td>
-                <td>${e.csvUrl ? `<button class="btn-redownload" onclick="reDownload(exportLog[${i}])">&#8595;</button>` : ''}</td>
+                <td>${e.csvUrl ? `<button class="btn-redownload" onclick="reDownload(exportLog[${i}])">&#8595; Download</button>` : ''}</td>
               </tr>`).join("")}
           </tbody>
         </table>`;
@@ -1343,7 +1336,7 @@
               <div class="log-card-val">${escapeHTML(e.date)} ${escapeHTML(e.time)}</div>
             </div>
           </div>
-          <div class="log-card-file">Selected: ${escapeHTML(formatSportBreakdown(e.breakdown) || "\xe2\x80\x94")}</div>
+          <div class="log-card-file">Selected: ${escapeHTML(formatSportBreakdown(e.breakdown) || "—")}</div>
           <div class="log-card-file">${escapeHTML(e.filename)}</div>
           ${e.csvUrl ? `<button class="btn-redownload" style="margin-top:10px;width:100%;text-align:center" onclick="reDownload(exportLog[${i}])">&#8595; Re-download CSV</button>` : ''}
         </div>`).join("");

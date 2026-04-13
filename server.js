@@ -467,7 +467,7 @@ app.get("/api/admin/export-leads", requireAuth, async (req, res) => {
     const baseQuery = () => {
       let q = supabase
         .from("leads")
-        .select("id, name, phone, location, sport_key", { count: "exact" })
+        .select("id, name, phone, location, sport_key, tab_name", { count: "exact" })
         .eq("crm_uploaded", false)
         .order("id", { ascending: true }); // Ensure stable sorting for pagination
 
@@ -486,8 +486,10 @@ app.get("/api/admin/export-leads", requireAuth, async (req, res) => {
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     res.setHeader("X-Lead-Count", count || 0);
 
-    // Write header
-    res.write("Name,Phone,Location\n");
+    // Write header — also buffer for Storage upload
+    const headerLine = "Name,Phone,Location,Sport\n";
+    let csvBuffer = headerLine;
+    res.write(headerLine);
 
     if (count === 0) {
       exportLockActive = false;
@@ -516,7 +518,10 @@ app.get("/api/admin/export-leads", requireAuth, async (req, res) => {
       }
 
       for (const l of data) {
-        res.write(`${escapeCSV(l.name)},${escapeCSV(l.phone)},${escapeCSV(l.location)}\n`);
+        const sportName = l.tab_name || l.sport_key || "Unknown";
+        const line = `${escapeCSV(l.name)},${escapeCSV(l.phone)},${escapeCSV(l.location)},${escapeCSV(sportName)}\n`;
+        res.write(line);
+        csvBuffer += line;
         exportedIds.push(l.id);
         if (l.sport_key) {
           breakdown[l.sport_key] = (breakdown[l.sport_key] || 0) + 1;
@@ -542,6 +547,28 @@ app.get("/api/admin/export-leads", requireAuth, async (req, res) => {
     // End stream
     res.end();
 
+    // ── Upload CSV to Supabase Storage for permanent re-download ──
+    let csvStorageUrl = null;
+    if (exportedIds.length > 0) {
+      try {
+        const { error: uploadErr } = await supabase.storage
+          .from("exports")
+          .upload(filename, Buffer.from(csvBuffer, "utf-8"), {
+            contentType: "text/csv",
+            upsert: true,
+          });
+        if (uploadErr) {
+          logger.warn("[Export] Storage upload failed:", uploadErr.message);
+        } else {
+          const { data: urlData } = supabase.storage.from("exports").getPublicUrl(filename);
+          csvStorageUrl = urlData?.publicUrl || null;
+          logger.info("[Export] CSV saved to storage:", csvStorageUrl);
+        }
+      } catch (storageErr) {
+        logger.warn("[Export] Storage upload exception:", storageErr.message);
+      }
+    }
+
     await safeLog(supabase.from("admin_logs").insert({
       admin_email: userEmail,
       action: "EXPORT_LEADS",
@@ -550,7 +577,8 @@ app.get("/api/admin/export-leads", requireAuth, async (req, res) => {
         leadCount: exportedIds.length,
         breakdown,
         filename,
-        status: exportedIds.length > 0 ? "exported" : "empty"
+        status: exportedIds.length > 0 ? "exported" : "empty",
+        csvStorageUrl,
       })
     }));
 
@@ -624,6 +652,7 @@ app.get("/api/admin/recent-exports", requireAuth, async (req, res) => {
         breakdown: details.breakdown || {},
         filename: details.filename || "",
         status: details.status || "exported",
+        csvStorageUrl: details.csvStorageUrl || null,
       };
     });
 
