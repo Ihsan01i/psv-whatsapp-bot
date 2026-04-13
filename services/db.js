@@ -16,7 +16,27 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
 }
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
-  auth: { persistSession: false },
+  auth: {
+    persistSession: false,
+    autoRefreshToken: false,
+    detectSessionInUrl: false
+  },
+  // Adding the Fetch Interceptor for debugging Node 24/undici
+  global: {
+    fetch: async (url, options) => {
+      const response = await fetch(url, options);
+      
+      // Log raw response for debugging hidden errors
+      console.log(`[Supabase Fetch] ${options.method} ${url} - Status: ${response.status}`);
+      
+      if (!response.ok) {
+        const errorBody = await response.clone().text();
+        console.error(`[Supabase Error Body]:`, errorBody);
+      }
+      
+      return response;
+    }
+  }
 });
 
 module.exports = supabase;
