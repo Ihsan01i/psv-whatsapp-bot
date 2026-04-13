@@ -9,7 +9,8 @@
 const { createClient } = require("@supabase/supabase-js");
 
 const SUPABASE_URL         = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY; // NEVER the anon key in backend
+// Use the service role key to bypass RLS entirely (as per user config)
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
   throw new Error("FATAL: SUPABASE_URL and SUPABASE_SERVICE_KEY must be set.");
