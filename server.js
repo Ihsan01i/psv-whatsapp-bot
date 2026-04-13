@@ -551,9 +551,14 @@ app.get("/api/admin/export-leads", requireAuth, async (req, res) => {
     let csvStorageUrl = null;
     if (exportedIds.length > 0) {
       try {
+        // Convert to a Blob (standard Web API) because native fetch in Node.js handles Blob perfectly 
+        // while Node.js Buffer objects often silently fail or result in empty uploads to Supabase Storage.
+        // ArrayBuffer or string also work, but Blob explicitly defines type and size for fetch boundary.
+        const fileBody = new Blob([csvBuffer], { type: "text/csv;charset=utf-8" });
+        
         const { error: uploadErr } = await supabase.storage
           .from("exports")
-          .upload(filename, Buffer.from(csvBuffer, "utf-8"), {
+          .upload(filename, fileBody, {
             contentType: "text/csv",
             upsert: true,
           });
