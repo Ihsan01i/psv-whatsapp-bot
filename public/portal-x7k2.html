@@ -45,11 +45,8 @@
       min-height: 100vh;
       padding: 40px 24px 80px;
       position: relative;
-      overflow-x: hidden;
       -webkit-font-smoothing: antialiased;
     }
-
-    html { overflow-x: hidden; }
 
     body::before,
     body::after {
@@ -1187,6 +1184,7 @@
     function normalizeExportEntry(entry) {
       const createdAt = entry.createdAt ? new Date(entry.createdAt) : new Date();
       return {
+        rawTime: createdAt.getTime(),
         date: createdAt.toLocaleDateString("en-IN"),
         time: createdAt.toLocaleTimeString("en-IN"),
         sport: entry.sport || "all",
@@ -1319,7 +1317,7 @@
                 <td>${escapeHTML(sportLabel(e.sport))}</td>
                 <td>${e.count}</td>
                 <td>${statusBadge(e.status)}</td>
-                <td>${e.csvUrl ? `<button class="btn-redownload" onclick="reDownload(exportLog[${i}])">&#8595; Download</button>` : '<span style="font-size:11px;color:var(--muted);">Saving…</span>'}</td>
+                <td>${e.csvUrl ? `<button class="btn-redownload" onclick="reDownload(exportLog[${i}])">&#8595; Download</button>` : ((Date.now() - e.rawTime < 15000 && e.status === "exported") ? '<span style="font-size:11px;color:var(--muted);">Saving…</span>' : '<span style="font-size:11px;color:var(--muted);">Expired</span>')}</td>
               </tr>`).join("")}
           </tbody>
         </table>`;
@@ -1347,8 +1345,7 @@
             </div>
           </div>
           <div class="log-card-file">Selected: ${escapeHTML(formatSportBreakdown(e.breakdown) || "—")}</div>
-          <div class="log-card-file">${escapeHTML(e.filename)}</div>
-          ${e.csvUrl ? `<button class="btn-redownload" style="margin-top:10px;width:100%;text-align:center" onclick="reDownload(exportLog[${i}])">&#8595; Re-download CSV</button>` : ''}
+          ${e.csvUrl ? `<button class="btn-redownload" style="margin-top:10px;width:100%;text-align:center" onclick="reDownload(exportLog[${i}])">&#8595; Re-download CSV</button>` : ((Date.now() - e.rawTime < 15000 && e.status === "exported") ? '<div style="margin-top:10px;font-size:12px;color:var(--muted);text-align:center">Saving…</div>' : '<div style="margin-top:10px;font-size:12px;color:var(--muted);text-align:center">Expired</div>')}
         </div>`).join("");
 
       container.innerHTML = "";
