@@ -548,20 +548,49 @@ app.get("/api/admin/export-leads", requireAuth, async (req, res) => {
     res.end();
 
     // ── Upload CSV to Supabase Storage for permanent re-download ──
+    //
+    // ROOT CAUSE OF PREVIOUS FAILURES:
+    //
+    // 1. Raw Node.js Buffer: storage-js hits the else-branch in uploadOrUpdate(),
+    //    sets content-type and cache-control headers correctly, but Node's native
+    //    fetch (v18+) sends a Buffer as a chunked stream with no Content-Length.
+    //    Supabase Storage rejects or silently drops requests without Content-Length
+    //    when it can't determine the body size upfront.
+    //
+    // 2. Blob: When storage-js detects `fileBody instanceof Blob` it wraps the body
+    //    in a FormData object and appends it with an empty field name ("").
+    //    Supabase Storage expects the raw file bytes in a direct POST, not multipart
+    //    FormData — so the server receives a multipart envelope it doesn't parse,
+    //    resulting in an empty or corrupt file (silent failure with upsert: true
+    //    because upsert swallows the 0-byte write without erroring).
+    //
+    // FIX: Pass an ArrayBuffer. It is NOT a Blob or FormData, so storage-js takes
+    // the direct binary path (else-branch), sets Content-Type correctly, and
+    // Node's fetch sends it with a known Content-Length. Supabase Storage accepts it.
+    //
+    // Additionally, pass `duplex: "half"` explicitly. storage-js auto-detects
+    // ReadableStream/pipe and sets duplex, but ArrayBuffer needs it set manually
+    // when running on Node 18+ with native fetch, otherwise fetch throws
+    // "RequestInit: duplex option is required when sending a body".
     let csvStorageUrl = null;
     if (exportedIds.length > 0) {
       try {
-        // Convert to a Blob (standard Web API) because native fetch in Node.js handles Blob perfectly 
-        // while Node.js Buffer objects often silently fail or result in empty uploads to Supabase Storage.
-        // ArrayBuffer or string also work, but Blob explicitly defines type and size for fetch boundary.
-        const fileBody = new Blob([csvBuffer], { type: "text/csv;charset=utf-8" });
-        
+        // Convert the CSV string → Node Buffer → ArrayBuffer (the underlying memory,
+        // zero-copy). ArrayBuffer has a known byteLength so fetch can set Content-Length.
+        const nodeBuffer = Buffer.from(csvBuffer, "utf-8");
+        const fileBody = nodeBuffer.buffer.slice(
+          nodeBuffer.byteOffset,
+          nodeBuffer.byteOffset + nodeBuffer.byteLength
+        );
+
         const { error: uploadErr } = await supabase.storage
           .from("exports")
           .upload(filename, fileBody, {
             contentType: "text/csv",
             upsert: true,
+            duplex: "half", // Required for Node 18+ native fetch with a body
           });
+
         if (uploadErr) {
           logger.warn("[Export] Storage upload failed:", uploadErr.message);
         } else {
