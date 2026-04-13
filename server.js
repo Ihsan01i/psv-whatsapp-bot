@@ -575,22 +575,20 @@ app.get("/api/admin/export-leads", requireAuth, async (req, res) => {
     let csvStorageUrl = null;
     if (exportedIds.length > 0) {
       try {
-        // Convert the CSV string → Node Buffer → ArrayBuffer (the underlying memory,
-        // zero-copy). ArrayBuffer has a known byteLength so fetch can set Content-Length.
-        const nodeBuffer = Buffer.from(csvBuffer, "utf-8");
-        const fileBody = nodeBuffer.buffer.slice(
-          nodeBuffer.byteOffset,
-          nodeBuffer.byteOffset + nodeBuffer.byteLength
-        );
+        // WORKAROUND: Bulletproof Base64 string payload
+        // Completely bypasses Node.js native fetch streaming bugs, Blob boundary issues, 
+        // and duplex limits by sending a standard text-based string that Supabase 
+        // decodes natively on the server-side.
+        const base64Data = Buffer.from(csvBuffer, "utf-8").toString("base64");
 
         const { error: uploadErr } = await supabase.storage
           .from("exports")
-          .upload(filename, fileBody, {
+          .upload(filename, base64Data, {
             contentType: "text/csv",
             upsert: true,
-            duplex: "half", // Required for Node 18+ native fetch with a body
+            decode: true, // Tells Supabase to decode our pure Base64 before storing natively as CSV
           });
-
+          
         if (uploadErr) {
           logger.warn("[Export] Storage upload failed:", uploadErr.message);
         } else {
