@@ -1026,6 +1026,7 @@
     const SPORTS = [
       { key: "Badminton - Coaching", aliases: ["badminton_coaching", "Badminton Coaching"], name: "Badminton Coaching", emoji: "🏸" },
       { key: "Badminton - Court Booking", aliases: ["badminton_court", "Court Booking"], name: "Court Booking", emoji: "🏟️" },
+      { key: "Badminton - Play Sessions", aliases: ["badminton_play_session", "Play Sessions"], name: "Play Sessions", emoji: "🏸" },
       { key: "Archery", aliases: ["archery"], name: "Archery", emoji: "🏹" },
       { key: "Basketball", aliases: ["basketball"], name: "Basketball", emoji: "🏀" },
       { key: "Roller Skating", aliases: ["roller_skating"], name: "Roller Skating", emoji: "🛼" },
@@ -1202,8 +1203,17 @@
         handleUnauthorized(res);
         if (!res.ok) throw new Error("Could not load recent exports");
         const data = await res.json();
-        // csvUrl is now a permanent Supabase Storage URL — no blob carry-over needed
-        exportLog = (data.exports || []).map(entry => normalizeExportEntry(entry));
+        const oldLog = exportLog;
+        // Prefer permanent Storage URL; fall back to in-memory blob URL if storage upload
+        // hasn't finished yet (e.g. called too soon after export)
+        exportLog = (data.exports || []).map(entry => {
+          const norm = normalizeExportEntry(entry);
+          if (!norm.csvUrl && norm.status === "exported") {
+            const existing = oldLog.find(o => o.time === norm.time && o.sport === norm.sport && o.csvUrl);
+            if (existing) norm.csvUrl = existing.csvUrl;
+          }
+          return norm;
+        });
         renderLog();
       } catch (err) {
         toast(err.message, "error");
@@ -1271,7 +1281,8 @@
           renderSummary(Object.values(counts).reduce((a, b) => a + b, 0));
         }
         renderLog();
-        setTimeout(() => loadRecentExports(), 400);
+        // Delay long enough for server to finish Storage upload + DB log before refresh
+        setTimeout(() => loadRecentExports(), 5000);
       } catch (err) {
         toast(`Export failed: ${err.message}`, "error");
         exportLog.unshift({ time: timeStr, date: dateStr, sport: sportKey, count: 0, filename: "—", csvUrl: null, status: "error" });
@@ -1295,9 +1306,10 @@
         return;
       }
 
-      // Desktop table
+      // Desktop table — width:100% constrains it to parent so overflow-x kicks in correctly
       const tableWrap = document.createElement("div");
-      tableWrap.style.overflowX = "auto";  // scoped scroll — only table overflows, not the page
+      tableWrap.style.overflowX = "auto";
+      tableWrap.style.width = "100%";
       tableWrap.innerHTML = `
           <table class="log-table">
             <thead><tr><th>Date</th><th>Time</th><th>Sport</th><th>Leads</th><th>File</th><th>Status</th><th></th></tr></thead>

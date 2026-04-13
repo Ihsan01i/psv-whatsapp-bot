@@ -19,7 +19,7 @@ const sports = {
 
   badminton: {
     name: "🏸 Badminton",
-    description: "Coaching & Court Booking",
+    description: "Coaching, Court Booking & Play Sessions",
     hasSubOptions: true,
     options: {
       badminton_coaching: {
@@ -70,6 +70,22 @@ const sports = {
           `🔗 Book: https://book.playspots.in/venues/nava-sports-centre\n\n` +
           `For group/monthly bookings:\n` +
           `📞 *+91 9509502000*`,
+      },
+
+      badminton_play_session: {
+        title: "🏸 Play Sessions",
+        tabName: "Badminton - Play Sessions",
+        message:
+          `🏸 *PSV Badminton — Play Sessions*\n\n` +
+          `Join our open play sessions at PSV Badminton Courts!\n\n` +
+          `📍 *Locations:*\n` +
+          `1. PSV Badminton Court, Shareca Lane, Vazhakkala\n` +
+          `https://maps.app.goo.gl/SQ7LZMtDhCpwepsh6\n` +
+          `2. Nava Sports Center, Annex Road, Vazhakkala\n` +
+          `https://maps.app.goo.gl/N7VYk8C4q7XeTWZB6\n\n` +
+          `🔗 *Book online:*\n` +
+          `https://book.playspots.in/venues/psv-badminton-academy-shareca-lane-vazhakkala\n\n` +
+          `📞 For group bookings: *+91 9509502000*`,
       },
     },
   },
